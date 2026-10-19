@@ -5,19 +5,30 @@ use crate::assets::RuntimeAssets;
 use crate::export;
 use crate::model::{LayerContent, Project};
 
+const MIN_EXPORT_SHORT_SIDE: f64 = 320.0;
+const MAX_EXPORT_LONG_SIDE: f64 = 7680.0;
+
 pub fn resolved_export_dimensions(project: &Project) -> (u32, u32) {
     let canvas_w = project.canvas.width.max(1) as f64;
     let canvas_h = project.canvas.height.max(1) as f64;
-    let base = project.export.width.min(project.export.height).max(320) as f64;
+    let base = (project.export.width.min(project.export.height) as f64)
+        .max(MIN_EXPORT_SHORT_SIDE);
     let aspect = canvas_w / canvas_h;
 
-    let (width, height) = if (aspect - 1.0).abs() < 0.000_001 {
+    let (mut width, mut height) = if (aspect - 1.0).abs() < 0.000_001 {
         (base, base)
     } else if aspect > 1.0 {
         (base * aspect, base)
     } else {
         (base, base / aspect)
     };
+
+    let longest = width.max(height);
+    if longest > MAX_EXPORT_LONG_SIDE {
+        let scale = MAX_EXPORT_LONG_SIDE / longest;
+        width *= scale;
+        height *= scale;
+    }
 
     (
         width.round().clamp(1.0, u32::MAX as f64) as u32,
@@ -158,5 +169,17 @@ mod tests {
         let (width, height) = resolved_export_dimensions(&project);
         assert_eq!((width, height), (320, 569));
         assert!((width as f64 / height as f64 - 0.5625).abs() < 0.001);
+    }
+
+    #[test]
+    fn extreme_canvas_aspect_is_capped_without_stretching() {
+        let mut project = Project::default();
+        project.canvas.width = 3840;
+        project.canvas.height = 240;
+        project.export.width = 2560;
+        project.export.height = 1440;
+        let (width, height) = resolved_export_dimensions(&project);
+        assert_eq!((width, height), (7680, 480));
+        assert!((width as f64 / height as f64 - 16.0).abs() < 0.001);
     }
 }
