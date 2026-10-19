@@ -77,26 +77,38 @@ impl FontCache {
         bytes
     }
 
-    fn resolved_bytes(&mut self, key: &FontKey) -> Option<Arc<Vec<u8>>> {
-        for family in [&key.family[..], "Segoe UI", "Arial"] {
-            let candidate = FontKey::new(family, key.bold, key.italic);
-            if let Some(bytes) = self.exact_bytes(&candidate) {
-                return Some(bytes);
-            }
-        }
-        None
-    }
-
-    fn parsed_font(&mut self, key: &FontKey) -> Option<FontArc> {
+    fn exact_parsed(&mut self, key: &FontKey) -> Option<FontArc> {
         if let Some(cached) = self.parsed.get(key) {
             return cached.clone();
         }
-
         let parsed = self
-            .resolved_bytes(key)
+            .exact_bytes(key)
             .and_then(|bytes| FontArc::try_from_vec(bytes.as_ref().clone()).ok());
         self.parsed.insert(key.clone(), parsed.clone());
         parsed
+    }
+
+    fn fallback_keys(key: &FontKey) -> Vec<FontKey> {
+        let mut keys = vec![key.clone()];
+        for family in ["Segoe UI", "Arial"] {
+            let candidate = FontKey::new(family, key.bold, key.italic);
+            if !keys.contains(&candidate) {
+                keys.push(candidate);
+            }
+        }
+        keys
+    }
+
+    fn resolved_bytes(&mut self, key: &FontKey) -> Option<Arc<Vec<u8>>> {
+        Self::fallback_keys(key)
+            .into_iter()
+            .find_map(|candidate| self.exact_bytes(&candidate))
+    }
+
+    fn resolved_parsed(&mut self, key: &FontKey) -> Option<FontArc> {
+        Self::fallback_keys(key)
+            .into_iter()
+            .find_map(|candidate| self.exact_parsed(&candidate))
     }
 }
 
@@ -116,7 +128,7 @@ pub fn list_families() -> Vec<String> {
 
 pub fn load_font_arc(family: &str, bold: bool, italic: bool) -> Option<FontArc> {
     let key = FontKey::new(family, bold, italic);
-    lock_cache().parsed_font(&key)
+    lock_cache().resolved_parsed(&key)
 }
 
 pub fn install_project_fonts(ctx: &egui::Context, project: &Project) {
@@ -199,6 +211,14 @@ mod tests {
         let italic = FontKey::new("Arial", false, true);
         assert_ne!(regular, bold);
         assert_ne!(regular, italic);
+    }
+
+    #[test]
+    fn fallback_keys_do_not_duplicate_default_family() {
+        let keys = FontCache::fallback_keys(&FontKey::new("Segoe UI", false, false));
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].family, "Segoe UI");
+        assert_eq!(keys[1].family, "Arial");
     }
 
     #[test]
