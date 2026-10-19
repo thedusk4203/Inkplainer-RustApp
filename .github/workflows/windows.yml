@@ -19,6 +19,8 @@ jobs:
         with:
           toolchain: stable
       - name: Check
+        env:
+          RUSTFLAGS: -D warnings
         run: cargo check --all-targets
       - name: Test
         run: cargo test --all-targets
