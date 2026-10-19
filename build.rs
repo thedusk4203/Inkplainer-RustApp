@@ -60,8 +60,8 @@ fn stage(out_dir: &Path, local_name: &str, upstream_path: &str) {
 }
 
 fn download_with_powershell(url: &str, destination: &Path) -> bool {
-    let dest = destination.to_string_lossy().replace(''', "''");
-    let url = url.replace(''', "''");
+    let dest = destination.to_string_lossy().replace('\'', "''");
+    let url = url.replace('\'', "''");
     let script = format!(
         "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; \
          Invoke-WebRequest -UseBasicParsing -Uri '{url}' -OutFile '{dest}'"
