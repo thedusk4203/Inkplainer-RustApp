@@ -1,28 +1,122 @@
 use ab_glyph::FontArc;
 use eframe::egui::{self, FontData, FontDefinitions, FontFamily};
 use fontdb::{Database, Family, Query, Style, Weight};
-use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use crate::model::{LayerContent, Project};
 
-pub fn list_families() -> Vec<String> {
-    let mut db = Database::new();
-    db.load_system_fonts();
-    let mut families = BTreeSet::new();
-    for face in db.faces() {
-        if let Some((name, _)) = face.families.first() {
-            families.insert(name.clone());
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FontKey {
+    family: String,
+    bold: bool,
+    italic: bool,
+}
+
+impl FontKey {
+    fn new(family: &str, bold: bool, italic: bool) -> Self {
+        let family = family.trim();
+        Self {
+            family: if family.is_empty() {
+                "Segoe UI".to_owned()
+            } else {
+                family.to_owned()
+            },
+            bold,
+            italic,
         }
     }
-    families.into_iter().collect()
+}
+
+struct FontCache {
+    db: Database,
+    families: Vec<String>,
+    bytes: HashMap<FontKey, Option<Arc<Vec<u8>>>>,
+    parsed: HashMap<FontKey, Option<FontArc>>,
+}
+
+impl FontCache {
+    fn new() -> Self {
+        let mut db = Database::new();
+        db.load_system_fonts();
+
+        let mut families = BTreeSet::new();
+        for face in db.faces() {
+            if let Some((name, _)) = face.families.first() {
+                families.insert(name.clone());
+            }
+        }
+
+        Self {
+            db,
+            families: families.into_iter().collect(),
+            bytes: HashMap::new(),
+            parsed: HashMap::new(),
+        }
+    }
+
+    fn exact_bytes(&mut self, key: &FontKey) -> Option<Arc<Vec<u8>>> {
+        if let Some(cached) = self.bytes.get(key) {
+            return cached.clone();
+        }
+
+        let family = Family::Name(&key.family);
+        let families = [family];
+        let query = Query {
+            families: &families,
+            weight: if key.bold { Weight::BOLD } else { Weight::NORMAL },
+            style: if key.italic { Style::Italic } else { Style::Normal },
+            ..Query::default()
+        };
+        let bytes = self
+            .db
+            .query(&query)
+            .and_then(|id| self.db.with_face_data(id, |data, _face_index| data.to_vec()))
+            .map(Arc::new);
+        self.bytes.insert(key.clone(), bytes.clone());
+        bytes
+    }
+
+    fn resolved_bytes(&mut self, key: &FontKey) -> Option<Arc<Vec<u8>>> {
+        for family in [&key.family[..], "Segoe UI", "Arial"] {
+            let candidate = FontKey::new(family, key.bold, key.italic);
+            if let Some(bytes) = self.exact_bytes(&candidate) {
+                return Some(bytes);
+            }
+        }
+        None
+    }
+
+    fn parsed_font(&mut self, key: &FontKey) -> Option<FontArc> {
+        if let Some(cached) = self.parsed.get(key) {
+            return cached.clone();
+        }
+
+        let parsed = self
+            .resolved_bytes(key)
+            .and_then(|bytes| FontArc::try_from_vec(bytes.as_ref().clone()).ok());
+        self.parsed.insert(key.clone(), parsed.clone());
+        parsed
+    }
+}
+
+static FONT_CACHE: OnceLock<Mutex<FontCache>> = OnceLock::new();
+
+fn cache() -> &'static Mutex<FontCache> {
+    FONT_CACHE.get_or_init(|| Mutex::new(FontCache::new()))
+}
+
+fn lock_cache() -> MutexGuard<'static, FontCache> {
+    cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+pub fn list_families() -> Vec<String> {
+    lock_cache().families.clone()
 }
 
 pub fn load_font_arc(family: &str, bold: bool, italic: bool) -> Option<FontArc> {
-    let bytes = load_font_bytes(family, bold, italic)
-        .or_else(|| load_font_bytes("Segoe UI", bold, italic))
-        .or_else(|| load_font_bytes("Arial", bold, italic))?;
-    FontArc::try_from_vec(bytes).ok()
+    let key = FontKey::new(family, bold, italic);
+    lock_cache().parsed_font(&key)
 }
 
 pub fn install_project_fonts(ctx: &egui::Context, project: &Project) {
@@ -32,25 +126,33 @@ pub fn install_project_fonts(ctx: &egui::Context, project: &Project) {
             requested.insert((text.font_family.trim().to_owned(), text.bold, text.italic));
         }
     }
-    if requested.is_empty() { return; }
+    if requested.is_empty() {
+        return;
+    }
 
     let mut definitions = FontDefinitions::default();
+    let mut cache = lock_cache();
     for (family, bold, italic) in requested {
-        let requested_family = if family.is_empty() { "Segoe UI" } else { family.as_str() };
-        let bytes = load_font_bytes(requested_family, bold, italic)
-            .or_else(|| load_font_bytes("Segoe UI", bold, italic))
-            .or_else(|| load_font_bytes("Arial", bold, italic));
-        let Some(bytes) = bytes else { continue; };
-        let key = egui_family_name(requested_family, bold, italic);
-        definitions.font_data.insert(key.clone(), Arc::new(FontData::from_owned(bytes)));
-        definitions.families.insert(FontFamily::Name(key.clone().into()), vec![key]);
+        let key = FontKey::new(&family, bold, italic);
+        let Some(bytes) = cache.resolved_bytes(&key) else {
+            continue;
+        };
+        let egui_key = egui_family_name(&key.family, bold, italic);
+        definitions.font_data.insert(
+            egui_key.clone(),
+            Arc::new(FontData::from_owned(bytes.as_ref().clone())),
+        );
+        definitions
+            .families
+            .insert(FontFamily::Name(egui_key.clone().into()), vec![egui_key]);
     }
+    drop(cache);
     ctx.set_fonts(definitions);
 }
 
 pub fn egui_family(family: &str, bold: bool, italic: bool) -> FontFamily {
-    let family = if family.trim().is_empty() { "Segoe UI" } else { family.trim() };
-    FontFamily::Name(egui_family_name(family, bold, italic).into())
+    let key = FontKey::new(family, bold, italic);
+    FontFamily::Name(egui_family_name(&key.family, bold, italic).into())
 }
 
 pub fn project_font_signature(project: &Project) -> String {
@@ -73,24 +175,41 @@ fn egui_family_name(family: &str, bold: bool, italic: bool) -> String {
     };
     format!(
         "inkplainer-font-{}-{style}",
-        family.trim().to_lowercase().replace(|c: char| !c.is_ascii_alphanumeric(), "-")
+        family
+            .trim()
+            .to_lowercase()
+            .replace(|character: char| !character.is_ascii_alphanumeric(), "-")
     )
 }
 
-fn load_font_bytes(family: &str, bold: bool, italic: bool) -> Option<Vec<u8>> {
-    let mut db = Database::new();
-    db.load_system_fonts();
-    let family = family.trim();
-    let families = if family.is_empty() { vec![Family::SansSerif] } else { vec![Family::Name(family)] };
-    let query = Query {
-        families: &families,
-        weight: if bold { Weight::BOLD } else { Weight::NORMAL },
-        style: if italic { Style::Italic } else { Style::Normal },
-        ..Query::default()
-    };
-    let id = db.query(&query)?;
-    db.with_face_data(id, |data, face_index| {
-        let _ = face_index;
-        data.to_vec()
-    })
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn font_key_normalizes_empty_family_to_default() {
+        assert_eq!(FontKey::new("", false, false).family, "Segoe UI");
+        assert_eq!(FontKey::new("   ", true, false).family, "Segoe UI");
+    }
+
+    #[test]
+    fn font_key_keeps_style_in_cache_identity() {
+        let regular = FontKey::new("Arial", false, false);
+        let bold = FontKey::new("Arial", true, false);
+        let italic = FontKey::new("Arial", false, true);
+        assert_ne!(regular, bold);
+        assert_ne!(regular, italic);
+    }
+
+    #[test]
+    fn egui_family_names_are_stable_and_style_specific() {
+        assert_eq!(
+            egui_family_name("Segoe UI", false, false),
+            "inkplainer-font-segoe-ui-regular"
+        );
+        assert_eq!(
+            egui_family_name("Segoe UI", true, true),
+            "inkplainer-font-segoe-ui-bold-italic"
+        );
+    }
 }
