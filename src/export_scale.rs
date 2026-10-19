@@ -5,6 +5,26 @@ use crate::assets::RuntimeAssets;
 use crate::export;
 use crate::model::{LayerContent, Project};
 
+pub fn resolved_export_dimensions(project: &Project) -> (u32, u32) {
+    let canvas_w = project.canvas.width.max(1) as f64;
+    let canvas_h = project.canvas.height.max(1) as f64;
+    let base = project.export.width.min(project.export.height).max(1) as f64;
+    let aspect = canvas_w / canvas_h;
+
+    let (width, height) = if (aspect - 1.0).abs() < 0.000_001 {
+        (base, base)
+    } else if aspect > 1.0 {
+        (base * aspect, base)
+    } else {
+        (base, base / aspect)
+    };
+
+    (
+        width.round().clamp(1.0, u32::MAX as f64) as u32,
+        height.round().clamp(1.0, u32::MAX as f64) as u32,
+    )
+}
+
 pub fn render_frame_at_size(
     project: &Project,
     assets: &RuntimeAssets,
@@ -84,5 +104,47 @@ mod tests {
         } else {
             panic!("expected text layer");
         }
+    }
+
+    #[test]
+    fn export_dimensions_follow_landscape_canvas_aspect() {
+        let mut project = Project::default();
+        project.canvas.width = 1280;
+        project.canvas.height = 720;
+        project.export.width = 1920;
+        project.export.height = 1080;
+        assert_eq!(resolved_export_dimensions(&project), (1920, 1080));
+    }
+
+    #[test]
+    fn export_dimensions_rotate_with_portrait_canvas() {
+        let mut project = Project::default();
+        project.canvas.width = 720;
+        project.canvas.height = 1280;
+        project.export.width = 1920;
+        project.export.height = 1080;
+        assert_eq!(resolved_export_dimensions(&project), (1080, 1920));
+    }
+
+    #[test]
+    fn export_dimensions_follow_square_canvas() {
+        let mut project = Project::default();
+        project.canvas.width = 1080;
+        project.canvas.height = 1080;
+        project.export.width = 2560;
+        project.export.height = 1440;
+        assert_eq!(resolved_export_dimensions(&project), (1440, 1440));
+    }
+
+    #[test]
+    fn arbitrary_canvas_aspect_is_preserved() {
+        let mut project = Project::default();
+        project.canvas.width = 1000;
+        project.canvas.height = 800;
+        project.export.width = 1920;
+        project.export.height = 1080;
+        let (width, height) = resolved_export_dimensions(&project);
+        assert_eq!((width, height), (1350, 1080));
+        assert!((width as f64 / height as f64 - 1.25).abs() < 0.001);
     }
 }
