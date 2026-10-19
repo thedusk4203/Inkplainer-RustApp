@@ -21,8 +21,9 @@ pub fn export_webm(
     let frame_count = (project.duration_seconds.max(0.5) * fps as f32)
         .ceil()
         .max(1.0) as u32;
-    let out_w = even(project.export.width.max(320));
-    let out_h = even(project.export.height.max(240));
+    let (resolved_w, resolved_h) = export_scale::resolved_export_dimensions(project);
+    let out_w = even(resolved_w.max(2));
+    let out_h = even(resolved_h.max(2));
 
     let speed = match project.export.quality {
         ExportQuality::High => 6,
