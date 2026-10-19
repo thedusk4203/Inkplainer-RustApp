@@ -1,12 +1,17 @@
 #![cfg(test)]
 
 use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32};
 
+use eframe::egui::{ColorImage, TextureOptions};
+use image::{Rgba, RgbaImage};
+
 use crate::animation::{layer_progress, reveal_regions};
-use crate::assets::RuntimeAssets;
-use crate::model::{AnimationStyle, ExportQuality, Layer, Project};
-use crate::{native_mp4, native_webm, project_io};
+use crate::assets::{RuntimeAssets, RuntimeImage};
+use crate::effects::build_edge_paths;
+use crate::model::{AnimationStyle, Background, ExportQuality, HandStyle, Layer, Project};
+use crate::{export, native_mp4, native_webm, project_io};
 
 #[test]
 fn ordered_layers_share_groups_and_unordered_layers_follow() {
@@ -95,6 +100,49 @@ fn deterministic_styles_produce_stable_reveal_geometry() {
             assert!((ra.v0 - rb.v0).abs() < f32::EPSILON);
             assert!((ra.u1 - rb.u1).abs() < f32::EPSILON);
             assert!((ra.v1 - rb.v1).abs() < f32::EPSILON);
+        }
+    }
+}
+
+#[test]
+fn representative_scanner_frame_matches_upstream_pixel_fixture() {
+    let mut project = Project::default();
+    project.canvas.width = 64;
+    project.canvas.height = 64;
+    project.canvas.background = Background::Solid([255, 255, 255, 255]);
+
+    let mut layer = Layer::new_image(PathBuf::from("fixture.png"), 64, 64, 16, 16);
+    layer.transform.x = 16.0;
+    layer.transform.y = 16.0;
+    layer.transform.w = 32.0;
+    layer.transform.h = 32.0;
+    layer.animation.style = AnimationStyle::Scanner;
+    layer.animation.zigzag = false;
+    layer.animation.hand = HandStyle::Ghost;
+    let layer_id = layer.id.clone();
+    project.layers = vec![layer];
+
+    let rgba = RgbaImage::from_pixel(16, 16, Rgba([200, 10, 20, 255]));
+    let ctx = eframe::egui::Context::default();
+    let color = ColorImage::from_rgba_unmultiplied([16, 16], rgba.as_raw());
+    let texture = ctx.load_texture("scanner-upstream-fixture", color, TextureOptions::LINEAR);
+    let edges = build_edge_paths(&rgba);
+    let mut assets = RuntimeAssets::default();
+    assets.images.insert(layer_id, RuntimeImage { texture, rgba, edges });
+
+    let frame = export::render_frame(&project, &assets, 0.5).expect("render scanner fixture");
+    assert_eq!(frame.dimensions(), (64, 64));
+
+    // Upstream Scanner uses 12 horizontal bands. At 0.5 progress exactly six
+    // bands are complete, therefore a 32x32 layer reveals exactly its top 16 rows.
+    for y in 0..64 {
+        for x in 0..64 {
+            let expected = if (16..48).contains(&x) && (16..32).contains(&y) {
+                Rgba([200, 10, 20, 255])
+            } else {
+                Rgba([255, 255, 255, 255])
+            };
+            assert_eq!(*frame.get_pixel(x, y), expected, "pixel mismatch at ({x}, {y})");
         }
     }
 }
