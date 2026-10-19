@@ -23,9 +23,6 @@ impl ExportJob {
         self.cancel.store(true, Ordering::Relaxed);
     }
 
-    pub fn is_cancelled(&self) -> bool {
-        self.cancel.load(Ordering::Relaxed)
-    }
 
     pub fn try_finish(&self) -> Option<Result<PathBuf, String>> {
         match self.receiver.try_recv() {

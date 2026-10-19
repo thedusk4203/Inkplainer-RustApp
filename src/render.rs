@@ -24,7 +24,6 @@ pub struct ResizeDelta {
 }
 
 pub struct CanvasResult {
-    pub rect: Rect,
     pub selected_drag_delta_canvas: Option<Vec2>,
     pub selected_resize_delta: Option<ResizeDelta>,
 }
@@ -93,7 +92,7 @@ pub fn paint_project(
         })
     } else { None };
 
-    CanvasResult { rect, selected_drag_delta_canvas, selected_resize_delta }
+    CanvasResult { selected_drag_delta_canvas, selected_resize_delta }
 }
 
 fn paint_layer(

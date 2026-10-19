@@ -770,12 +770,12 @@ impl InkplainerApp {
             ui.painter().image(texture, rect, egui::Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
 
             if self.slicer.mode == SliceMode::Grid {
-                for c in 1..self.slicer.cols { let x = rect.left() + rect.width() * c as f32 / self.slicer.cols as f32; ui.painter().line_segment([Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())], Stroke::new(1.0, Color32::LIGHT_BLUE)); }
-                for r in 1..self.slicer.rows { let y = rect.top() + rect.height() * r as f32 / self.slicer.rows as f32; ui.painter().line_segment([Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)], Stroke::new(1.0, Color32::LIGHT_BLUE)); }
+                for c in 1..self.slicer.cols { let x = rect.left() + rect.width() * c as f32 / self.slicer.cols as f32; ui.painter().line_segment([Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())], Stroke::new(1.0_f32, Color32::LIGHT_BLUE)); }
+                for r in 1..self.slicer.rows { let y = rect.top() + rect.height() * r as f32 / self.slicer.rows as f32; ui.painter().line_segment([Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)], Stroke::new(1.0_f32, Color32::LIGHT_BLUE)); }
             } else if self.slicer.mode == SliceMode::Rectangles {
                 for r in &self.slicer.rects {
                     let rr = egui::Rect::from_min_size(Pos2::new(rect.left() + r.x * rect.width(), rect.top() + r.y * rect.height()), Vec2::new(r.w * rect.width(), r.h * rect.height()));
-                    ui.painter().rect_stroke(rr, 0.0, Stroke::new(2.0, Color32::YELLOW), egui::StrokeKind::Inside);
+                    ui.painter().rect_stroke(rr, 0.0, Stroke::new(2.0_f32, Color32::YELLOW), egui::StrokeKind::Inside);
                 }
                 if response.drag_started() {
                     if let Some(pos) = response.interact_pointer_pos() {
@@ -792,7 +792,7 @@ impl InkplainerApp {
                         Pos2::new(rect.left() + x0 * rect.width(), rect.top() + y0 * rect.height()),
                         Pos2::new(rect.left() + x1 * rect.width(), rect.top() + y1 * rect.height()),
                     );
-                    ui.painter().rect_stroke(live, 0.0, Stroke::new(2.0, Color32::LIGHT_GREEN), egui::StrokeKind::Inside);
+                    ui.painter().rect_stroke(live, 0.0, Stroke::new(2.0_f32, Color32::LIGHT_GREEN), egui::StrokeKind::Inside);
                     if response.drag_stopped() {
                         let w = x1 - x0;
                         let h = y1 - y0;
@@ -813,7 +813,7 @@ impl InkplainerApp {
                 for pair in self.slicer.freehand.windows(2) {
                     let a = Pos2::new(rect.left() + pair[0][0] * rect.width(), rect.top() + pair[0][1] * rect.height());
                     let b = Pos2::new(rect.left() + pair[1][0] * rect.width(), rect.top() + pair[1][1] * rect.height());
-                    ui.painter().line_segment([a,b], Stroke::new(2.0, Color32::YELLOW));
+                    ui.painter().line_segment([a,b], Stroke::new(2.0_f32, Color32::YELLOW));
                 }
             }
             ui.separator();
