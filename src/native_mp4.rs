@@ -1,4 +1,4 @@
-use image::{imageops::FilterType, RgbaImage};
+use image::RgbaImage;
 use mp4io::{Codec, InputSample, TrackParams, Writer, WriterConfig};
 use rusty_h264::{Encoder, EncoderConfig, Preset, YuvFrame};
 use std::fs;
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::assets::RuntimeAssets;
-use crate::export;
+use crate::export_scale;
 use crate::model::{ExportQuality, Project};
 
 pub fn export_mp4(
@@ -50,13 +50,8 @@ pub fn export_mp4(
         } else {
             i as f32 / (frame_count - 1) as f32
         };
-        let frame = export::render_frame(project, assets, p)
+        let frame = export_scale::render_frame_at_size(project, assets, p, out_w, out_h)
             .map_err(|e| format!("Render frame {i}: {e:#}"))?;
-        let frame = if frame.width() != out_w || frame.height() != out_h {
-            image::imageops::resize(&frame, out_w, out_h, FilterType::Lanczos3)
-        } else {
-            frame
-        };
         let yuv = rgba_to_i420(&frame);
         let annex_b = encoder.encode(&yuv);
         if annex_b.is_empty() {
