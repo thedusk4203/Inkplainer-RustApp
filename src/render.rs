@@ -8,6 +8,7 @@ use crate::model::{
     AnimationStyle, Background, ColoringStyle, HandStyle, Layer, LayerContent, Project,
     RevealStyle, StrokeStyle, TextAlign, TextDirection, TextDrawStyle,
 };
+use crate::timing::hand_motion_progress;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResizeHandle {
@@ -415,13 +416,12 @@ fn paint_hand(
 }
 
 fn smoothed_hand_tip(rect: Rect, runtime: &RuntimeImage, layer: &Layer, progress: f32) -> Pos2 {
-    let speed = (layer.animation.hand_speed / 30.0).clamp(0.0, 1.0);
-    let span = 0.012 + 0.040 * speed;
+    const SMOOTHING_SPAN: f32 = 0.024;
     let mut sum = Vec2::ZERO;
     let mut weight_sum = 0.0;
     for sample in 0..6 {
         let t = sample as f32 / 5.0;
-        let p = (progress - span * t).clamp(0.0, 1.0);
+        let p = (progress - SMOOTHING_SPAN * t).clamp(0.0, 1.0);
         let point = hand_tip(rect, runtime, layer, p);
         let weight = 1.0 - t * 0.65;
         sum += point.to_vec2() * weight;
@@ -431,6 +431,7 @@ fn smoothed_hand_tip(rect: Rect, runtime: &RuntimeImage, layer: &Layer, progress
 }
 
 fn hand_tip(rect: Rect, runtime: &RuntimeImage, layer: &Layer, progress: f32) -> Pos2 {
+    let progress = hand_motion_progress(progress, layer.animation.hand_speed);
     if matches!(layer.animation.style, AnimationStyle::Contour | AnimationStyle::OutlineFill | AnimationStyle::IllustFill | AnimationStyle::OutlineOnly) {
         let pts = select_edge_path(&runtime.edges, &layer.animation);
         if !pts.is_empty() {
