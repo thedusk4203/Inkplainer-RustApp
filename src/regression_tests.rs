@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use eframe::egui::{ColorImage, TextureOptions};
 use image::{Rgba, RgbaImage};
@@ -11,7 +11,7 @@ use crate::animation::{layer_progress, reveal_regions};
 use crate::assets::{RuntimeAssets, RuntimeImage};
 use crate::effects::build_edge_paths;
 use crate::model::{AnimationStyle, Background, ExportQuality, HandStyle, Layer, Project};
-use crate::{export, native_mp4, native_webm, project_io};
+use crate::{export, export_scale, native_mp4, native_webm, project_io};
 
 #[test]
 fn ordered_layers_share_groups_and_unordered_layers_follow() {
@@ -148,7 +148,7 @@ fn representative_scanner_frame_matches_upstream_pixel_fixture() {
 }
 
 #[test]
-fn project_json_roundtrip_preserves_editor_state() {
+fn project_json_roundtrip_preserves_editor_state_and_group_metadata() {
     let mut project = Project::default();
     project.name = "Parity regression".to_owned();
     project.duration_seconds = 13.25;
@@ -156,6 +156,7 @@ fn project_json_roundtrip_preserves_editor_state() {
     let mut layer = Layer::new_text(project.canvas.width, project.canvas.height);
     layer.name = "Title".to_owned();
     layer.anim_order = Some(7);
+    layer.group = Some("Intro".to_owned());
     layer.animation.style = AnimationStyle::TextDraw;
     layer.transform.x = 123.0;
     layer.transform.y = 77.0;
@@ -169,6 +170,7 @@ fn project_json_roundtrip_preserves_editor_state() {
     assert_eq!(restored.layers.len(), 1);
     assert_eq!(restored.layers[0].name, "Title");
     assert_eq!(restored.layers[0].anim_order, Some(7));
+    assert_eq!(restored.layers[0].group.as_deref(), Some("Intro"));
     assert_eq!(restored.layers[0].animation.style, AnimationStyle::TextDraw);
     assert_eq!(restored.layers[0].transform.x, 123.0);
     assert_eq!(restored.layers[0].transform.y, 77.0);
@@ -190,8 +192,69 @@ fn project_file_roundtrip_works_without_assets() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Mp4Box {
+    kind: [u8; 4],
+    size: usize,
+}
+
+fn mp4_top_level_boxes(bytes: &[u8]) -> Result<Vec<Mp4Box>, String> {
+    let mut boxes = Vec::new();
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        if bytes.len() - offset < 8 {
+            return Err(format!("truncated MP4 box header at offset {offset}"));
+        }
+
+        let size32 = u32::from_be_bytes(
+            bytes[offset..offset + 4]
+                .try_into()
+                .map_err(|_| "invalid MP4 size field")?,
+        );
+        let kind: [u8; 4] = bytes[offset + 4..offset + 8]
+            .try_into()
+            .map_err(|_| "invalid MP4 box type")?;
+
+        let (size, header_size) = match size32 {
+            0 => (bytes.len() - offset, 8usize),
+            1 => {
+                if bytes.len() - offset < 16 {
+                    return Err(format!("truncated extended MP4 box header at offset {offset}"));
+                }
+                let extended = u64::from_be_bytes(
+                    bytes[offset + 8..offset + 16]
+                        .try_into()
+                        .map_err(|_| "invalid extended MP4 size field")?,
+                );
+                let size = usize::try_from(extended)
+                    .map_err(|_| "extended MP4 box size exceeds usize")?;
+                (size, 16usize)
+            }
+            value => (value as usize, 8usize),
+        };
+
+        if size < header_size {
+            return Err(format!("invalid MP4 box size {size} at offset {offset}"));
+        }
+        if size > bytes.len() - offset {
+            return Err(format!("MP4 box overruns file at offset {offset}"));
+        }
+
+        boxes.push(Mp4Box { kind, size });
+        offset += size;
+        if size32 == 0 {
+            break;
+        }
+    }
+    Ok(boxes)
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|window| window == needle)
+}
+
 #[test]
-fn native_video_encoders_emit_real_mp4_and_webm_containers() {
+fn native_video_encoders_emit_structurally_valid_mp4_and_webm_containers() {
     let mut project = Project::default();
     project.canvas.width = 320;
     project.canvas.height = 240;
@@ -201,6 +264,7 @@ fn native_video_encoders_emit_real_mp4_and_webm_containers() {
     project.export.fps = 12;
     project.export.quality = ExportQuality::Low;
     project.layers.clear();
+    assert_eq!(export_scale::resolved_export_dimensions(&project), (426, 320));
 
     let assets = RuntimeAssets::default();
     let root = std::env::temp_dir().join(format!("inkplainer-codec-test-{}", uuid::Uuid::new_v4()));
@@ -214,8 +278,13 @@ fn native_video_encoders_emit_real_mp4_and_webm_containers() {
         .expect("pure Rust MP4 export");
     let mp4 = fs::read(&mp4_path).expect("read MP4");
     assert!(mp4.len() > 64, "MP4 output unexpectedly small");
-    assert_eq!(&mp4[4..8], b"ftyp", "MP4 must start with an ftyp box");
-    assert_eq!(mp4_progress.load(std::sync::atomic::Ordering::Relaxed), 1000);
+    let boxes = mp4_top_level_boxes(&mp4).expect("parse top-level MP4 boxes");
+    assert_eq!(boxes.first().map(|entry| entry.kind), Some(*b"ftyp"));
+    assert!(boxes.iter().any(|entry| entry.kind == *b"moov" && entry.size > 8));
+    assert!(boxes.iter().any(|entry| entry.kind == *b"mdat" && entry.size > 8));
+    assert!(contains_bytes(&mp4, b"avc1"), "MP4 must declare an AVC/H.264 sample entry");
+    assert!(contains_bytes(&mp4, b"avcC"), "MP4 must contain AVC decoder configuration");
+    assert_eq!(mp4_progress.load(Ordering::Relaxed), 1000);
 
     let webm_progress = AtomicU32::new(0);
     let webm_cancel = AtomicBool::new(false);
@@ -224,7 +293,46 @@ fn native_video_encoders_emit_real_mp4_and_webm_containers() {
     let webm = fs::read(&webm_path).expect("read WebM");
     assert!(webm.len() > 64, "WebM output unexpectedly small");
     assert_eq!(&webm[..4], &[0x1a, 0x45, 0xdf, 0xa3], "WebM must start with the EBML header");
-    assert_eq!(webm_progress.load(std::sync::atomic::Ordering::Relaxed), 1000);
+    assert!(contains_bytes(&webm, &[0x18, 0x53, 0x80, 0x67]), "WebM must contain a Segment element");
+    assert!(contains_bytes(&webm, &[0x16, 0x54, 0xae, 0x6b]), "WebM must contain Tracks");
+    assert!(contains_bytes(&webm, &[0x1f, 0x43, 0xb6, 0x75]), "WebM must contain a Cluster");
+    assert!(contains_bytes(&webm, b"V_AV1"), "WebM must declare an AV1 video track");
+    assert_eq!(webm_progress.load(Ordering::Relaxed), 1000);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn cancelled_video_exports_do_not_leave_partial_files() {
+    let mut project = Project::default();
+    project.canvas.width = 320;
+    project.canvas.height = 240;
+    project.duration_seconds = 0.5;
+    project.export.width = 320;
+    project.export.height = 240;
+    project.export.fps = 12;
+    project.export.quality = ExportQuality::Low;
+    project.layers.clear();
+
+    let assets = RuntimeAssets::default();
+    let root = std::env::temp_dir().join(format!("inkplainer-cancel-test-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&root).expect("create cancel test dir");
+
+    let mp4_path = root.join("cancelled.mp4");
+    fs::write(&mp4_path, b"stale").expect("seed stale MP4 file");
+    let progress = AtomicU32::new(0);
+    let cancel = AtomicBool::new(true);
+    let result = native_mp4::export_mp4(&project, &assets, &mp4_path, &progress, &cancel);
+    assert_eq!(result.as_deref().err(), Some("Export cancelled"));
+    assert!(!mp4_path.exists(), "cancelled MP4 must remove stale/partial output");
+
+    let webm_path = root.join("cancelled.webm");
+    fs::write(&webm_path, b"stale").expect("seed stale WebM file");
+    let progress = AtomicU32::new(0);
+    let cancel = AtomicBool::new(true);
+    let result = native_webm::export_webm(&project, &assets, &webm_path, &progress, &cancel);
+    assert_eq!(result.as_deref().err(), Some("Export cancelled"));
+    assert!(!webm_path.exists(), "cancelled WebM must remove stale/partial output");
 
     let _ = fs::remove_dir_all(root);
 }
