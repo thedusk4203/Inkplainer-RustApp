@@ -2,11 +2,12 @@ use eframe::egui::{self, FontData, FontDefinitions, FontFamily};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use crate::model::{LayerContent, Project};
 
 static FONT_NAMES: OnceLock<Vec<String>> = OnceLock::new();
+static LAST_SIGNATURE: OnceLock<Mutex<String>> = OnceLock::new();
 
 pub fn available_font_names() -> &'static [String] {
     FONT_NAMES.get_or_init(|| {
@@ -47,6 +48,13 @@ pub fn project_font_signature(project: &Project) -> String {
 }
 
 pub fn sync_project_fonts(ctx: &egui::Context, project: &Project) {
+    let signature = project_font_signature(project);
+    let lock = LAST_SIGNATURE.get_or_init(|| Mutex::new(String::new()));
+    if let Ok(mut last) = lock.lock() {
+        if *last == signature { return; }
+        *last = signature;
+    }
+
     let mut definitions = FontDefinitions::default();
     let mut variants = BTreeSet::<(String, bool, bool)>::new();
     for layer in &project.layers {
@@ -103,11 +111,10 @@ pub fn resolve_windows_font_path(family: &str, bold: bool, italic: bool) -> Opti
     }
 
     candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    candidates.into_iter().next().map(|(_, p)| p)
-        .or_else(|| {
-            let fallback = fonts.join("segoeui.ttf");
-            fallback.exists().then_some(fallback)
-        })
+    candidates.into_iter().next().map(|(_, p)| p).or_else(|| {
+        let fallback = fonts.join("segoeui.ttf");
+        fallback.exists().then_some(fallback)
+    })
 }
 
 fn windows_fonts_dir() -> PathBuf {
