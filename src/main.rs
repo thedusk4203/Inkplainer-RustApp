@@ -20,6 +20,8 @@ mod slicer;
 mod timing;
 
 #[cfg(test)]
+mod audit_tests;
+#[cfg(test)]
 mod regression_tests;
 
 use std::collections::HashSet;
