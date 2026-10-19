@@ -323,7 +323,7 @@ fn cancelled_video_exports_do_not_leave_partial_files() {
     let progress = AtomicU32::new(0);
     let cancel = AtomicBool::new(true);
     let result = native_mp4::export_mp4(&project, &assets, &mp4_path, &progress, &cancel);
-    assert_eq!(result.as_deref().err(), Some("Export cancelled"));
+    assert_eq!(result.err().as_deref(), Some("Export cancelled"));
     assert!(!mp4_path.exists(), "cancelled MP4 must remove stale/partial output");
 
     let webm_path = root.join("cancelled.webm");
@@ -331,7 +331,7 @@ fn cancelled_video_exports_do_not_leave_partial_files() {
     let progress = AtomicU32::new(0);
     let cancel = AtomicBool::new(true);
     let result = native_webm::export_webm(&project, &assets, &webm_path, &progress, &cancel);
-    assert_eq!(result.as_deref().err(), Some("Export cancelled"));
+    assert_eq!(result.err().as_deref(), Some("Export cancelled"));
     assert!(!webm_path.exists(), "cancelled WebM must remove stale/partial output");
 
     let _ = fs::remove_dir_all(root);
