@@ -1,15 +1,17 @@
 use eframe::egui::{self, Color32, Pos2, RichText, Stroke, Vec2};
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::assets::RuntimeAssets;
 use crate::export;
+use crate::export_worker::{self, ExportJob};
+use crate::font_catalog;
 use crate::model::{
     AnimationSettings, AnimationStyle, Background, ColoringStyle, DetectionAlgorithm,
     ExportFormat, ExportQuality, HandStyle, Layer, LayerContent, Preset, Project, RevealStyle,
     StrokeStyle, TextAlign, TextDirection, TextDrawStyle,
 };
-use crate::project_io;
+use crate::project_io::{self, ProjectLibraryEntry};
 use crate::render;
 use crate::slicer::{self, NormalizedRect};
 
@@ -58,12 +60,20 @@ pub struct InkplainerApp {
     suppress_history_once: bool,
     slicer: SlicerState,
     autosave_available: bool,
+    project_browser_open: bool,
+    project_library: Vec<ProjectLibraryEntry>,
+    project_library_storage: u64,
+    export_job: Option<ExportJob>,
+    font_families: Vec<String>,
+    font_signature: String,
 }
 
 impl InkplainerApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let project = Project::default();
+        font_catalog::install_project_fonts(&cc.egui_ctx, &project);
         Self {
-            project: Project::default(),
+            project,
             assets: RuntimeAssets::default(),
             selected_layer: None,
             project_path: None,
@@ -78,6 +88,12 @@ impl InkplainerApp {
             suppress_history_once: false,
             slicer: SlicerState::default(),
             autosave_available: project_io::autosave_path().exists(),
+            project_browser_open: false,
+            project_library: Vec::new(),
+            project_library_storage: 0,
+            export_job: None,
+            font_families: font_catalog::list_families(),
+            font_signature: String::new(),
         }
     }
 
@@ -88,6 +104,8 @@ impl InkplainerApp {
         self.project_path = None;
         self.playhead = 1.0;
         self.playing = false;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
         self.status = "New project".to_owned();
     }
 
@@ -148,20 +166,30 @@ impl InkplainerApp {
         } else { self.save_project_as(); }
     }
 
-    fn open_project(&mut self, ctx: &egui::Context) {
-        let Some(path) = rfd::FileDialog::new().add_filter("Inkplainer Project", &["json"]).pick_file() else { return; };
-        match project_io::load_project(&path) {
+    fn load_project_path(&mut self, ctx: &egui::Context, path: &Path, keep_path: bool) {
+        match project_io::load_project(path) {
             Ok(project) => {
                 self.project = project;
                 let errors = self.assets.load_project(ctx, &self.project);
-                self.project_path = Some(path.clone());
+                self.project_path = keep_path.then(|| path.to_path_buf());
                 self.selected_layer = None;
                 self.playhead = 1.0;
                 self.playing = false;
-                self.status = if errors.is_empty() { format!("Opened {}", path.display()) } else { format!("Opened with missing assets: {}", errors.join(" | ")) };
+                self.undo_stack.clear();
+                self.redo_stack.clear();
+                self.status = if errors.is_empty() {
+                    format!("Opened {}", path.display())
+                } else {
+                    format!("Opened with missing assets: {}", errors.join(" | "))
+                };
             }
             Err(err) => self.status = format!("Open failed: {err:#}"),
         }
+    }
+
+    fn open_project(&mut self, ctx: &egui::Context) {
+        let Some(path) = rfd::FileDialog::new().add_filter("Inkplainer Project", &["json"]).pick_file() else { return; };
+        self.load_project_path(ctx, &path, true);
     }
 
     fn restore_autosave(&mut self, ctx: &egui::Context) {
@@ -179,6 +207,21 @@ impl InkplainerApp {
         }
     }
 
+    fn refresh_project_library(&mut self) {
+        match project_io::list_project_library() {
+            Ok(entries) => {
+                self.project_library = entries;
+                self.project_library_storage = project_io::project_library_storage_bytes().unwrap_or(0);
+            }
+            Err(err) => self.status = format!("Project library failed: {err:#}"),
+        }
+    }
+
+    fn open_project_browser(&mut self) {
+        self.refresh_project_library();
+        self.project_browser_open = true;
+    }
+
     fn export_png(&mut self) {
         let Some(path) = rfd::FileDialog::new().add_filter("PNG image", &["png"]).set_file_name("inkplainer-frame.png").save_file() else { return; };
         match export::export_png(&self.project, &self.assets, &path) {
@@ -187,15 +230,33 @@ impl InkplainerApp {
         }
     }
 
-    fn export_video(&mut self, webm: bool) {
+    fn start_video_export(&mut self, webm: bool) {
+        if self.export_job.is_some() { return; }
         let (ext, label) = if webm { ("webm", "WebM video") } else { ("mp4", "MP4 video") };
         let Some(path) = rfd::FileDialog::new().add_filter(label, &[ext]).set_file_name(format!("inkplainer-animation.{ext}")).save_file() else { return; };
         self.status = format!("Rendering {}…", ext.to_uppercase());
-        let fps = self.project.export.fps;
-        let result = if webm { export::export_webm(&self.project, &self.assets, &path, fps) } else { export::export_mp4(&self.project, &self.assets, &path, fps) };
-        match result {
-            Ok(()) => self.status = format!("{} exported: {}", ext.to_uppercase(), path.display()),
-            Err(err) => self.status = format!("{} export failed: {err:#}", ext.to_uppercase()),
+        self.export_job = Some(export_worker::start(self.project.clone(), self.assets.clone(), path, webm));
+    }
+
+    fn poll_export(&mut self, ctx: &egui::Context) {
+        let Some(job) = self.export_job.as_ref() else { return; };
+        if let Some(result) = job.try_finish() {
+            match result {
+                Ok(path) => self.status = format!("Video exported: {}", path.display()),
+                Err(err) if err == "Export cancelled" => self.status = "Export cancelled".to_owned(),
+                Err(err) => self.status = format!("Video export failed: {err}"),
+            }
+            self.export_job = None;
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+    }
+
+    fn sync_fonts(&mut self, ctx: &egui::Context) {
+        let signature = font_catalog::project_font_signature(&self.project);
+        if signature != self.font_signature {
+            font_catalog::install_project_fonts(ctx, &self.project);
+            self.font_signature = signature;
         }
     }
 
@@ -218,6 +279,7 @@ impl InkplainerApp {
         if project_io::save_autosave(&self.project).is_ok() {
             self.last_autosave_fingerprint = fp;
             self.autosave_available = true;
+            if self.project_browser_open { self.refresh_project_library(); }
         }
     }
 
@@ -268,7 +330,7 @@ impl InkplainerApp {
         if redo { self.redo(ctx); return; }
         if save { self.save_project(); }
         if open { self.open_project(ctx); }
-        if escape { self.slicer.open = false; }
+        if escape { self.slicer.open = false; self.project_browser_open = false; }
         if delete || backspace { self.delete_selected(); }
         if space && !ctx.wants_keyboard_input() {
             if self.playhead >= 1.0 { self.playhead = 0.0; }
@@ -284,6 +346,7 @@ impl InkplainerApp {
                 ui.separator();
                 if ui.button("New").clicked() { self.new_project(); }
                 if ui.button("Open").clicked() { self.open_project(ctx); }
+                if ui.button("Projects").clicked() { self.open_project_browser(); }
                 if ui.button("Save").clicked() { self.save_project(); }
                 if ui.button("Save As").clicked() { self.save_project_as(); }
                 if self.autosave_available && ui.button("Restore Autosave").clicked() { self.restore_autosave(ctx); }
@@ -297,9 +360,9 @@ impl InkplainerApp {
                     self.slicer = SlicerState { open: true, ..Default::default() };
                 }
                 ui.separator();
-                if ui.button("Export PNG").clicked() { self.export_png(); }
-                if ui.button("Export MP4").clicked() { self.export_video(false); }
-                if ui.button("Export WebM").clicked() { self.export_video(true); }
+                if ui.add_enabled(self.export_job.is_none(), egui::Button::new("Export PNG")).clicked() { self.export_png(); }
+                if ui.add_enabled(self.export_job.is_none(), egui::Button::new("Export MP4")).clicked() { self.start_video_export(false); }
+                if ui.add_enabled(self.export_job.is_none(), egui::Button::new("Export WebM")).clicked() { self.start_video_export(true); }
             });
         });
     }
@@ -432,7 +495,17 @@ impl InkplainerApp {
             if let LayerContent::Text(text) = &mut layer.content {
                 ui.separator(); ui.heading("Text");
                 ui.text_edit_multiline(&mut text.text);
-                ui.horizontal(|ui| { ui.label("Font"); ui.text_edit_singleline(&mut text.font_family); });
+                egui::ComboBox::from_label("Font")
+                    .selected_text(if text.font_family.trim().is_empty() { "Segoe UI" } else { &text.font_family })
+                    .width(220.0)
+                    .show_ui(ui, |ui| {
+                        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                            for family in &self.font_families {
+                                ui.selectable_value(&mut text.font_family, family.clone(), family);
+                            }
+                        });
+                    });
+                ui.horizontal(|ui| { ui.label("Custom family"); ui.text_edit_singleline(&mut text.font_family); });
                 ui.add(egui::Slider::new(&mut text.size, 10.0..=400.0).text("Font size"));
                 ui.horizontal(|ui| { ui.checkbox(&mut text.bold, "Bold"); ui.checkbox(&mut text.italic, "Italic"); });
                 egui::ComboBox::from_label("Align").selected_text(match text.align { TextAlign::Left => "Left", TextAlign::Center => "Center", TextAlign::Right => "Right" }).show_ui(ui, |ui| {
@@ -448,6 +521,7 @@ impl InkplainerApp {
 
     fn canvas_controls(&mut self, ui: &mut egui::Ui) {
         ui.collapsing("Canvas", |ui| {
+            ui.horizontal(|ui| { ui.label("Project"); ui.text_edit_singleline(&mut self.project.name); });
             ui.horizontal(|ui| {
                 ui.label("Size");
                 ui.add(egui::DragValue::new(&mut self.project.canvas.width).range(320..=3840));
@@ -588,7 +662,67 @@ impl InkplainerApp {
                 ui.separator();
                 ui.label(RichText::new(&self.status).small());
             });
+            if let Some(job) = &self.export_job {
+                ui.horizontal(|ui| {
+                    let p = job.progress();
+                    ui.add(egui::ProgressBar::new(p).desired_width(260.0).text(format!("Export {:>3}%", (p * 100.0).round() as u32)));
+                    if ui.button("Cancel export").clicked() { job.cancel(); }
+                    ui.small(job.path.display().to_string());
+                });
+            }
         });
+    }
+
+    fn project_browser_window(&mut self, ctx: &egui::Context) {
+        if !self.project_browser_open { return; }
+        let mut open_path: Option<PathBuf> = None;
+        let mut delete_path: Option<PathBuf> = None;
+        let mut refresh = false;
+        egui::Window::new("Projects")
+            .open(&mut self.project_browser_open)
+            .default_size([620.0, 480.0])
+            .resizable(true)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.strong(format!("{} saved project(s)", self.project_library.len()));
+                    ui.separator();
+                    ui.label(format!("Storage: {}", human_bytes(self.project_library_storage)));
+                    if ui.button("Refresh").clicked() { refresh = true; }
+                });
+                ui.small(project_io::project_library_dir().display().to_string());
+                ui.separator();
+                if self.project_library.is_empty() {
+                    ui.label("No autosaved projects yet. Edit a project with Auto-save enabled to create one.");
+                } else {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for entry in &self.project_library {
+                            ui.group(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.strong(&entry.name);
+                                        ui.small(format!("{} · {}", age_label(entry.modified), human_bytes(entry.bytes)));
+                                    });
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui.small_button("Delete").clicked() { delete_path = Some(entry.path.clone()); }
+                                        if ui.button("Open").clicked() { open_path = Some(entry.path.clone()); }
+                                    });
+                                });
+                            });
+                        }
+                    });
+                }
+            });
+        if refresh { self.refresh_project_library(); }
+        if let Some(path) = delete_path {
+            match project_io::delete_library_project(&path) {
+                Ok(()) => { self.status = "Saved project deleted".to_owned(); self.refresh_project_library(); }
+                Err(err) => self.status = format!("Delete failed: {err:#}"),
+            }
+        }
+        if let Some(path) = open_path {
+            self.load_project_path(ctx, &path, false);
+            self.project_browser_open = false;
+        }
     }
 
     fn slicer_window(&mut self, ctx: &egui::Context) {
@@ -727,12 +861,15 @@ impl eframe::App for InkplainerApp {
         let before = self.project.clone();
         self.update_playback(ctx);
         self.process_shortcuts(ctx);
+        self.poll_export(ctx);
         self.top_bar(ctx);
         self.bottom_bar(ctx);
         self.layers_panel(ctx);
         self.settings_panel(ctx);
         self.center_canvas(ctx);
+        self.project_browser_window(ctx);
         self.slicer_window(ctx);
+        self.sync_fonts(ctx);
         self.maybe_autosave();
 
         if !self.suppress_history_once && fingerprint(&before) != fingerprint(&self.project) {
@@ -815,4 +952,24 @@ fn set_export_resolution(project: &mut Project, base: u32) {
 
 fn fingerprint(project: &Project) -> String {
     serde_json::to_string(project).unwrap_or_default()
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let b = bytes as f64;
+    if b >= GB { format!("{:.2} GB", b / GB) }
+    else if b >= MB { format!("{:.1} MB", b / MB) }
+    else if b >= KB { format!("{:.1} KB", b / KB) }
+    else { format!("{bytes} B") }
+}
+
+fn age_label(modified: SystemTime) -> String {
+    let Ok(age) = SystemTime::now().duration_since(modified) else { return "just now".to_owned(); };
+    let secs = age.as_secs();
+    if secs < 60 { "just now".to_owned() }
+    else if secs < 3600 { format!("{} min ago", secs / 60) }
+    else if secs < 86_400 { format!("{} h ago", secs / 3600) }
+    else { format!("{} d ago", secs / 86_400) }
 }
