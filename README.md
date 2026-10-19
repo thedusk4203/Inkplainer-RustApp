@@ -1,74 +1,83 @@
 # Inkplainer-RustApp
 
-Native Windows Rust port of [Inkplainer-OS](https://github.com/NadirWeb-App/Inkplainer-OS),
-a free/open-source whiteboard animation editor.
+Native Windows Rust port of [Inkplainer-OS](https://github.com/NadirWeb-App/Inkplainer-OS), a
+free/open-source whiteboard animation editor.
 
-This project intentionally does **not** use Electron, Tauri, a WebView, HTML, or JavaScript.
-The editor runs as a native Rust executable using `eframe/egui` and CPU image processing.
+This project intentionally does **not** use Electron, Tauri, a WebView, HTML, or JavaScript at
+runtime. The editor is a native Rust executable built with `eframe/egui`, native image processing,
+and self-contained Rust video encoders.
 
-## Current implementation
+## Implemented feature set
 
-The initial port provides a usable native editor foundation:
-
-- Native Windows desktop window (`eframe`/`egui`)
+- Native Windows desktop editor (`eframe` / `egui`)
 - Image layers (PNG/JPG/GIF/WebP first frame)
-- Text layers
-- Layer visibility, opacity, stacking, position and size
+- Text layers with installed-font selection
+- Layer visibility, opacity, stacking, grouping, position and resize handles
 - Per-layer animation order; equal order values animate in parallel
-- Playback timeline
-- Native implementations of:
-  - Chunk Jump
-  - Scanner + Zigzag
-  - Contour
-  - Outline Chunks
-  - Outline Fill
-  - Illust Fill (currently shares the outline/reveal pipeline; coloring pass is next)
-  - Outline Only
-  - Text Draw
-  - Human / Animal / Portrait / Vehicle / Building / Landscape / Spiral priority reveals
-- Project save/open as JSON (`*.inkplainer.json`)
+- Undo / redo and keyboard playback/edit shortcuts
+- Auto-save/restore and project browser
+- Portable copied project assets
+- Grid, rectangle-drag and freehand slicer workflows
+- Upstream whiteboard animation styles, including Chunk Jump, Scanner/Zigzag, Contour,
+  Outline Chunks, Outline Fill, Illust Fill, Outline Only, Text Draw, Scribble, Nervous,
+  Top Anchor, Human, Animal, Portrait, Vehicle, Building, Landscape, Spiral and Nature
+- Classic, Adaptive, Morph Shell and Canny+ outline detection
+- Default, Charcoal, Sketch, Fountain and Blueprint stroke styles
+- Sparse, Filled and Watercolor coloring modes
+- Instant, Fade, Dissolve, Wipe, Iris and Scanlines reveal modes
+- Upstream Hand 1/2/3, Pen, Cartoon and Pixel Art sprite library with smooth hand glide
 - PNG final-frame export
-- MP4 export through installed `ffmpeg`
-- Windows CI workflow
+- Self-contained MP4/H.264 export
+- Self-contained WebM/AV1 export
+- Background export worker with progress/cancel
+- Windows CI with render, persistence and native codec regression tests
 
-## Port status vs upstream
+See [`PARITY_STATUS.md`](PARITY_STATUS.md) for the audited parity checklist and limitations.
 
-| Area | Status |
-|---|---|
-| Native Rust editor shell | Implemented |
-| Image/text layers | Implemented |
-| Layer animation order / parallel groups | Implemented |
-| Chunk/Scanner/Specialized styles | Implemented |
-| Contour/Outline base pipeline | Implemented |
-| Full upstream outline algorithms (Classic/Adaptive/Morph/Canny+) | Planned |
-| Stroke styles (charcoal/sketch/fountain/blueprint) | Planned |
-| Full Illust Fill coloring styles | Planned |
-| Slicer (grid/rectangle/freehand) | Planned |
-| Hand sprite library + smooth hand glide | Planned |
-| Background texture parity | Partial |
-| Project asset embedding | Planned (currently stores image paths) |
-| PNG export | Implemented |
-| MP4 export | Implemented via ffmpeg |
-| WebM export | Planned |
-| Auto-save/project browser | Planned |
-| Undo/redo | Planned |
+## Video export
+
+MP4 and WebM export do **not** require an installed `ffmpeg` executable.
+
+- MP4 uses the native Rust H.264 pipeline and MP4 muxer.
+- WebM uses `rav1e` AV1 encoding and a native WebM/EBML muxer.
+- CI smoke tests encode real files and validate the MP4 `ftyp` and WebM EBML container headers.
+
+Available output controls include 720p / 1080p / 1440p presets, FPS and quality.
+
+## Hand sprite library
+
+The six non-Ghost hand styles use the exact PNG sprite assets and `tipX`/`tipY` anchor metadata from
+the pinned Inkplainer-OS baseline documented in [`UPSTREAM.md`](UPSTREAM.md). Landscape/portrait and
+720p/1080p/1440p variants are selected to match the canvas. The same sprites are used by interactive
+preview and offline PNG/video rendering.
+
+During a CI/release build, missing upstream sprites are treated as a build failure. Local source
+builds can use a transparent fallback when the network is unavailable.
 
 ## Architecture
 
 ```text
 src/
-  main.rs         Native app entrypoint
-  app.rs          Editor UI + commands + playback
-  model.rs        Serializable project/layer/settings model
-  assets.rs       Image decoding, GPU texture upload, edge extraction
-  animation.rs    Timeline grouping + reveal algorithms
-  render.rs       Interactive native canvas rendering
-  export.rs       CPU frame renderer + PNG/MP4 pipeline
-  project_io.rs   Project JSON persistence
+  main.rs             Native app entrypoint
+  app.rs              Editor UI, commands, playback and project workflow
+  model.rs            Serializable project/layer/settings model
+  assets.rs           Image decoding, textures, edge extraction and runtime hand assets
+  hand_assets.rs      Pinned upstream hand metadata/embedded sprite definitions
+  animation.rs        Timeline grouping + reveal algorithms
+  effects.rs          Edge/detection/stroke processing
+  render.rs           Interactive native canvas rendering
+  export.rs           CPU frame renderer + PNG frame path
+  native_mp4.rs       Self-contained H.264/MP4 export
+  native_webm.rs      Self-contained AV1/WebM export
+  export_worker.rs    Background export/progress/cancel
+  slicer.rs           Grid/rectangle/freehand slicing
+  project_io.rs       Save/open/autosave/project library
+  font_catalog.rs     Installed font discovery/rendering
+  regression_tests.rs CI regression/smoke tests
 ```
 
-The renderer intentionally keeps animation algorithms independent from the UI so the same
-reveal logic can be reused by interactive playback and offline video rendering.
+The animation model is shared between interactive preview and offline rendering so reveal timing and
+hand motion follow the same project state.
 
 ## Build on Windows
 
@@ -90,24 +99,14 @@ The executable will be at:
 target\release\inkplainer-rustapp.exe
 ```
 
-### MP4 export
-
-MP4 export currently calls `ffmpeg` from `PATH`:
-
-```powershell
-ffmpeg -version
-```
-
-If that command is unavailable, PNG export still works. A later milestone will bundle or
-replace the external encoder so video export is self-contained.
-
 ## Project format
 
-Projects are JSON documents. Image layers currently retain absolute/local file paths to source
-assets. Moving the source files can therefore produce a missing-asset warning. The next project
-format revision will embed/copy assets into a portable project package.
+Projects are JSON documents (`*.inkplainer.json`). Imported image assets are copied into a portable
+asset directory next to the saved project so a project is not dependent on the original import
+location.
 
 ## Upstream and license
 
-This is a derivative/reimplementation of Inkplainer-OS by Nadir. See [UPSTREAM.md](UPSTREAM.md).
-The upstream project is Apache-2.0 licensed, and this port retains that license and attribution.
+This is a derivative/reimplementation of Inkplainer-OS by Nadir. See [`UPSTREAM.md`](UPSTREAM.md)
+for the pinned baseline and asset attribution. The upstream project is Apache-2.0 licensed, and this
+port retains the required license and attribution.
