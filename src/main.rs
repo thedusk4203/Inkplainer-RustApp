@@ -3,6 +3,7 @@ mod app;
 mod assets;
 mod effects;
 mod export;
+mod fonts;
 mod hand;
 mod model;
 mod project_io;
