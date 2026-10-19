@@ -3,8 +3,10 @@ mod app;
 mod assets;
 mod effects;
 mod export;
+mod hand;
 mod model;
 mod project_io;
+mod project_store;
 mod render;
 mod slicer;
 
