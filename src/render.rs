@@ -8,9 +8,24 @@ use crate::model::{
     RevealStyle, StrokeStyle, TextAlign, TextDirection, TextDrawStyle,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeHandle {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ResizeDelta {
+    pub handle: ResizeHandle,
+    pub delta_canvas: Vec2,
+}
+
 pub struct CanvasResult {
     pub rect: Rect,
     pub selected_drag_delta_canvas: Option<Vec2>,
+    pub selected_resize_delta: Option<ResizeDelta>,
 }
 
 pub fn paint_project(
@@ -39,16 +54,45 @@ pub fn paint_project(
     }
     painter.rect_stroke(rect, 0.0, Stroke::new(1.0_f32, Color32::from_gray(110)), StrokeKind::Inside);
 
-    let selected_drag_delta_canvas = if response.dragged() {
+    let sx = project.canvas.width as f32 / rect.width().max(1.0);
+    let sy = project.canvas.height as f32 / rect.height().max(1.0);
+    let mut selected_resize_delta = None;
+
+    if let Some(idx) = selected_layer {
+        if let Some(layer) = project.layers.get(idx) {
+            let layer_rect = to_screen_rect(rect, project, layer);
+            let handles = [
+                (ResizeHandle::TopLeft, layer_rect.left_top()),
+                (ResizeHandle::TopRight, layer_rect.right_top()),
+                (ResizeHandle::BottomLeft, layer_rect.left_bottom()),
+                (ResizeHandle::BottomRight, layer_rect.right_bottom()),
+            ];
+            for (slot, (handle, center)) in handles.into_iter().enumerate() {
+                let handle_rect = Rect::from_center_size(center, Vec2::splat(12.0));
+                let id = ui.id().with(("layer_resize", idx, slot));
+                let r = ui.interact(handle_rect, id, egui::Sense::drag());
+                let fill = if r.hovered() || r.dragged() { Color32::WHITE } else { Color32::from_rgb(56, 132, 255) };
+                painter.rect_filled(handle_rect, 2.0, fill);
+                painter.rect_stroke(handle_rect, 2.0, Stroke::new(1.5, Color32::from_rgb(25, 82, 180)), StrokeKind::Inside);
+                if r.dragged() {
+                    let d = ui.input(|i| i.pointer.delta());
+                    selected_resize_delta = Some(ResizeDelta {
+                        handle,
+                        delta_canvas: Vec2::new(d.x * sx, d.y * sy),
+                    });
+                }
+            }
+        }
+    }
+
+    let selected_drag_delta_canvas = if selected_resize_delta.is_none() && response.dragged() {
         selected_layer.map(|_| {
             let pointer_delta = ui.input(|i| i.pointer.delta());
-            let sx = project.canvas.width as f32 / rect.width().max(1.0);
-            let sy = project.canvas.height as f32 / rect.height().max(1.0);
             Vec2::new(pointer_delta.x * sx, pointer_delta.y * sy)
         })
     } else { None };
 
-    CanvasResult { rect, selected_drag_delta_canvas }
+    CanvasResult { rect, selected_drag_delta_canvas, selected_resize_delta }
 }
 
 fn paint_layer(
@@ -72,7 +116,7 @@ fn paint_layer(
                     AnimationStyle::OutlineOnly => paint_outline_only(painter, layer_rect, runtime, layer, progress),
                     _ => paint_reveal(painter, layer_rect, runtime, layer, progress, tint),
                 }
-                paint_hand(painter, layer_rect, runtime, layer, progress);
+                paint_hand(painter, layer_rect, runtime, layer, progress, project.hand_glide_enabled);
             } else {
                 painter.rect_filled(layer_rect, 0.0, Color32::from_rgb(80, 30, 30));
                 painter.text(layer_rect.center(), Align2::CENTER_CENTER, "Missing image", FontId::proportional(16.0), Color32::WHITE);
@@ -285,25 +329,61 @@ fn paint_edge_path(painter: &egui::Painter, rect: Rect, runtime: &RuntimeImage, 
     }
 }
 
-fn paint_hand(painter: &egui::Painter, rect: Rect, runtime: &RuntimeImage, layer: &Layer, progress: f32) {
+fn paint_hand(painter: &egui::Painter, rect: Rect, runtime: &RuntimeImage, layer: &Layer, progress: f32, smooth_hand: bool) {
     if layer.animation.hand == HandStyle::Ghost || progress <= 0.0 || progress >= 1.0 { return; }
-    let tip = hand_tip(rect, runtime, layer, progress);
+    let tip = if smooth_hand {
+        smoothed_hand_tip(rect, runtime, layer, progress)
+    } else {
+        hand_tip(rect, runtime, layer, progress)
+    };
     let s = (rect.width().min(rect.height()) * 0.035).clamp(8.0, 34.0);
     match layer.animation.hand {
+        HandStyle::Ghost => {}
+        HandStyle::Hand1 => {
+            painter.circle_filled(tip + Vec2::new(s * 0.82, s * 0.96), s * 0.70, Color32::from_rgb(231, 190, 158));
+            painter.circle_filled(tip + Vec2::new(s * 0.43, s * 0.54), s * 0.24, Color32::from_rgb(242, 205, 175));
+            painter.line_segment([tip, tip + Vec2::new(s * 1.48, s * 1.68)], Stroke::new(s * 0.24, Color32::from_rgb(46, 46, 50)));
+        }
+        HandStyle::Hand2 => {
+            painter.circle_filled(tip + Vec2::new(s * 0.72, s * 1.12), s * 0.76, Color32::from_rgb(176, 118, 84));
+            painter.rect_filled(Rect::from_center_size(tip + Vec2::new(s * 1.18, s * 1.62), Vec2::new(s * 0.95, s * 1.0)), s * 0.18, Color32::from_rgb(72, 91, 131));
+            painter.line_segment([tip, tip + Vec2::new(s * 1.35, s * 1.78)], Stroke::new(s * 0.25, Color32::from_rgb(30, 31, 35)));
+        }
+        HandStyle::Hand3 => {
+            painter.circle_filled(tip + Vec2::new(s * 0.92, s * 0.92), s * 0.72, Color32::from_rgb(246, 211, 184));
+            painter.rect_filled(Rect::from_center_size(tip + Vec2::new(s * 1.35, s * 1.54), Vec2::new(s * 1.12, s * 0.82)), s * 0.32, Color32::from_rgb(205, 218, 232));
+            painter.line_segment([tip, tip + Vec2::new(s * 1.62, s * 1.55)], Stroke::new(s * 0.22, Color32::from_rgb(62, 50, 44)));
+        }
         HandStyle::Pen => {
             painter.line_segment([tip + Vec2::new(s * 1.8, s * 1.6), tip], Stroke::new((s * 0.28).max(2.0), Color32::from_rgb(45, 45, 50)));
             painter.circle_filled(tip + Vec2::new(s * 1.8, s * 1.6), s * 0.24, Color32::from_rgb(210, 210, 215));
+        }
+        HandStyle::Cartoon => {
+            painter.circle_filled(tip + Vec2::new(s * 0.9, s * 0.95), s * 0.78, Color32::from_rgb(255, 220, 157));
+            painter.circle_stroke(tip + Vec2::new(s * 0.9, s * 0.95), s * 0.78, Stroke::new((s * 0.12).max(1.5), Color32::from_rgb(55, 49, 45)));
+            painter.line_segment([tip, tip + Vec2::new(s * 1.55, s * 1.7)], Stroke::new(s * 0.27, Color32::from_rgb(54, 64, 83)));
         }
         HandStyle::PixelArt => {
             painter.rect_filled(Rect::from_min_size(tip + Vec2::new(-s * 0.2, s * 0.4), Vec2::new(s * 1.6, s * 1.25)), 0.0, Color32::from_rgb(228, 183, 145));
             painter.line_segment([tip, tip + Vec2::new(s * 0.9, s * 0.95)], Stroke::new(s * 0.28, Color32::from_rgb(48, 48, 52)));
         }
-        _ => {
-            painter.circle_filled(tip + Vec2::new(s * 0.85, s * 1.0), s * 0.68, Color32::from_rgb(231, 190, 158));
-            painter.line_segment([tip, tip + Vec2::new(s * 1.45, s * 1.65)], Stroke::new(s * 0.24, Color32::from_rgb(46, 46, 50)));
-            painter.circle_filled(tip + Vec2::new(s * 0.55, s * 0.65), s * 0.25, Color32::from_rgb(238, 201, 171));
-        }
     }
+}
+
+fn smoothed_hand_tip(rect: Rect, runtime: &RuntimeImage, layer: &Layer, progress: f32) -> Pos2 {
+    let speed = (layer.animation.hand_speed / 30.0).clamp(0.0, 1.0);
+    let span = 0.012 + 0.040 * speed;
+    let mut sum = Vec2::ZERO;
+    let mut weight_sum = 0.0;
+    for sample in 0..6 {
+        let t = sample as f32 / 5.0;
+        let p = (progress - span * t).clamp(0.0, 1.0);
+        let point = hand_tip(rect, runtime, layer, p);
+        let weight = 1.0 - t * 0.65;
+        sum += point.to_vec2() * weight;
+        weight_sum += weight;
+    }
+    Pos2::new(sum.x / weight_sum.max(0.001), sum.y / weight_sum.max(0.001))
 }
 
 fn hand_tip(rect: Rect, runtime: &RuntimeImage, layer: &Layer, progress: f32) -> Pos2 {
