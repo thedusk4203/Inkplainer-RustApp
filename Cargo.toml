@@ -8,8 +8,8 @@ license = "Apache-2.0"
 repository = "https://github.com/thedusk4203/Inkplainer-RustApp"
 
 [dependencies]
-eframe = { version = "0.37", features = ["persistence"] }
-egui_extras = { version = "0.37", features = ["image"] }
+eframe = { version = "=0.33.3", features = ["persistence"] }
+egui_extras = { version = "=0.33.3", features = ["image"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 rfd = "0.17"
 serde = { version = "1", features = ["derive"] }
