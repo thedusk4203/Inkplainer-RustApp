@@ -1,8 +1,9 @@
-use eframe::egui::{self, Align2, Color32, FontFamily, FontId, Pos2, Rect, Stroke, StrokeKind, Vec2};
+use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
 use crate::animation::{layer_progress, reveal_regions, RevealRegion};
 use crate::assets::{RuntimeAssets, RuntimeImage};
 use crate::effects::select_edge_path;
+use crate::fonts;
 use crate::hand::hand_tip_normalized;
 use crate::model::{
     AnimationStyle, Background, ColoringStyle, HandStyle, Layer, LayerContent, Project,
@@ -22,6 +23,8 @@ pub fn paint_project(
     selected_layer: Option<usize>,
     playhead: f32,
 ) -> CanvasResult {
+    fonts::sync_project_fonts(ui.ctx(), project);
+
     let avail = ui.available_size();
     let aspect = project.canvas.width.max(1) as f32 / project.canvas.height.max(1) as f32;
     let mut size = avail;
@@ -133,7 +136,10 @@ fn paint_text_layer(
         TextAlign::Right => Pos2::new(layer_rect.right(), layer_rect.center().y),
     };
     let scale = canvas_rect.width() / project.canvas.width.max(1) as f32;
-    let font = FontId::new((text.size * scale).max(8.0), FontFamily::Proportional);
+    let font = FontId::new(
+        (text.size * scale).max(8.0),
+        fonts::egui_family(&text.font_family, text.bold, text.italic),
+    );
 
     if layer.animation.style == AnimationStyle::TextDraw {
         let clip = directional_clip(layer_rect, progress, layer.animation.text_direction);
@@ -246,8 +252,6 @@ fn paint_reveal_style(painter: &egui::Painter, rect: Rect, runtime: &RuntimeImag
         }
         RevealStyle::WipeRight => paint_image_region(painter, rect, runtime, RevealRegion { u0: 0.0, v0: 0.0, u1: p, v1: 1.0 }, tint),
         RevealStyle::Iris => {
-            // egui does not provide a circular texture clip; tile the UV space densely and reveal
-            // cells by radial distance. The result tracks the CPU export's true circular mask.
             let cols = 36usize;
             let rows = 24usize;
             let radius = p * 0.72;
