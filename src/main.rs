@@ -1,6 +1,7 @@
 mod animation;
 mod app {
     include!("app.rs");
+    #[allow(unused_imports)]
     pub(crate) mod native_ui;
 }
 mod assets;
