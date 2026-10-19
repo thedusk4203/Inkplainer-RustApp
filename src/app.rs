@@ -10,6 +10,7 @@ use crate::model::{
     StrokeStyle, TextAlign, TextDirection, TextDrawStyle,
 };
 use crate::project_io;
+use crate::project_store;
 use crate::render;
 use crate::slicer::{self, NormalizedRect};
 
@@ -23,6 +24,8 @@ struct SlicerState {
     rows: u32,
     rects: Vec<NormalizedRect>,
     rect_editor: [f32; 4],
+    rect_drag_start: Option<[f32; 2]>,
+    rect_drag_current: Option<[f32; 2]>,
     freehand: Vec<[f32; 2]>,
 }
 
@@ -35,6 +38,8 @@ impl Default for SlicerState {
             rows: 2,
             rects: Vec::new(),
             rect_editor: [0.1, 0.1, 0.4, 0.4],
+            rect_drag_start: None,
+            rect_drag_current: None,
             freehand: Vec::new(),
         }
     }
@@ -50,12 +55,14 @@ pub struct InkplainerApp {
     pub status: String,
     last_tick: Instant,
     last_autosave: Instant,
+    last_project_snapshot: Instant,
     last_autosave_fingerprint: String,
     undo_stack: Vec<Project>,
     redo_stack: Vec<Project>,
     suppress_history_once: bool,
     slicer: SlicerState,
     autosave_available: bool,
+    projects_open: bool,
 }
 
 impl InkplainerApp {
@@ -70,12 +77,14 @@ impl InkplainerApp {
             status: "Ready".to_owned(),
             last_tick: Instant::now(),
             last_autosave: Instant::now(),
+            last_project_snapshot: Instant::now(),
             last_autosave_fingerprint: String::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             suppress_history_once: false,
             slicer: SlicerState::default(),
             autosave_available: project_io::autosave_path().exists(),
+            projects_open: false,
         }
     }
 
@@ -86,6 +95,8 @@ impl InkplainerApp {
         self.project_path = None;
         self.playhead = 1.0;
         self.playing = false;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
         self.status = "New project".to_owned();
     }
 
@@ -149,29 +160,30 @@ impl InkplainerApp {
     fn open_project(&mut self, ctx: &egui::Context) {
         let Some(path) = rfd::FileDialog::new().add_filter("Inkplainer Project", &["json"]).pick_file() else { return; };
         match project_io::load_project(&path) {
-            Ok(project) => {
-                self.project = project;
-                let errors = self.assets.load_project(ctx, &self.project);
-                self.project_path = Some(path.clone());
-                self.selected_layer = None;
-                self.playhead = 1.0;
-                self.playing = false;
-                self.status = if errors.is_empty() { format!("Opened {}", path.display()) } else { format!("Opened with missing assets: {}", errors.join(" | ")) };
-            }
+            Ok(project) => self.install_project(ctx, project, Some(path)),
             Err(err) => self.status = format!("Open failed: {err:#}"),
         }
     }
 
+    fn install_project(&mut self, ctx: &egui::Context, project: Project, path: Option<PathBuf>) {
+        self.project = project;
+        let errors = self.assets.load_project(ctx, &self.project);
+        self.project_path = path.clone();
+        self.selected_layer = None;
+        self.playhead = 1.0;
+        self.playing = false;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.status = if errors.is_empty() {
+            path.map(|p| format!("Opened {}", p.display())).unwrap_or_else(|| "Project restored".to_owned())
+        } else {
+            format!("Opened with missing assets: {}", errors.join(" | "))
+        };
+    }
+
     fn restore_autosave(&mut self, ctx: &egui::Context) {
         match project_io::load_autosave() {
-            Ok(Some(project)) => {
-                self.project = project;
-                let errors = self.assets.load_project(ctx, &self.project);
-                self.selected_layer = None;
-                self.project_path = None;
-                self.playhead = 1.0;
-                self.status = if errors.is_empty() { "Autosave restored".to_owned() } else { format!("Autosave restored with missing assets: {}", errors.join(" | ")) };
-            }
+            Ok(Some(project)) => self.install_project(ctx, project, None),
             Ok(None) => self.status = "No autosave found".to_owned(),
             Err(err) => self.status = format!("Autosave restore failed: {err:#}"),
         }
@@ -190,7 +202,11 @@ impl InkplainerApp {
         let Some(path) = rfd::FileDialog::new().add_filter(label, &[ext]).set_file_name(format!("inkplainer-animation.{ext}")).save_file() else { return; };
         self.status = format!("Rendering {}…", ext.to_uppercase());
         let fps = self.project.export.fps;
-        let result = if webm { export::export_webm(&self.project, &self.assets, &path, fps) } else { export::export_mp4(&self.project, &self.assets, &path, fps) };
+        let result = if webm {
+            export::export_webm(&self.project, &self.assets, &path, fps)
+        } else {
+            export::export_mp4(&self.project, &self.assets, &path, fps)
+        };
         match result {
             Ok(()) => self.status = format!("{} exported: {}", ext.to_uppercase(), path.display()),
             Err(err) => self.status = format!("{} export failed: {err:#}", ext.to_uppercase()),
@@ -216,6 +232,12 @@ impl InkplainerApp {
         if project_io::save_autosave(&self.project).is_ok() {
             self.last_autosave_fingerprint = fp;
             self.autosave_available = true;
+        }
+        if self.last_project_snapshot.elapsed() >= Duration::from_secs(20) {
+            if let Err(err) = project_store::save_snapshot(&self.project) {
+                self.status = format!("Project snapshot failed: {err:#}");
+            }
+            self.last_project_snapshot = Instant::now();
         }
     }
 
@@ -266,7 +288,7 @@ impl InkplainerApp {
         if redo { self.redo(ctx); return; }
         if save { self.save_project(); }
         if open { self.open_project(ctx); }
-        if escape { self.slicer.open = false; }
+        if escape { self.slicer.open = false; self.projects_open = false; }
         if delete || backspace { self.delete_selected(); }
         if space && !ctx.wants_keyboard_input() {
             if self.playhead >= 1.0 { self.playhead = 0.0; }
@@ -284,6 +306,7 @@ impl InkplainerApp {
                 if ui.button("Open").clicked() { self.open_project(ctx); }
                 if ui.button("Save").clicked() { self.save_project(); }
                 if ui.button("Save As").clicked() { self.save_project_as(); }
+                if ui.button("Projects").clicked() { self.projects_open = true; }
                 if self.autosave_available && ui.button("Restore Autosave").clicked() { self.restore_autosave(ctx); }
                 ui.separator();
                 if ui.add_enabled(!self.undo_stack.is_empty(), egui::Button::new("Undo")).clicked() { self.undo(ctx); }
@@ -445,7 +468,8 @@ impl InkplainerApp {
     }
 
     fn canvas_controls(&mut self, ui: &mut egui::Ui) {
-        ui.collapsing("Canvas", |ui| {
+        ui.collapsing("Project & Canvas", |ui| {
+            ui.horizontal(|ui| { ui.label("Project"); ui.text_edit_singleline(&mut self.project.name); });
             ui.horizontal(|ui| {
                 ui.label("Size");
                 ui.add(egui::DragValue::new(&mut self.project.canvas.width).range(320..=3840));
@@ -536,8 +560,24 @@ impl InkplainerApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 let result = render::paint_project(ui, &self.project, &self.assets, self.selected_layer, self.playhead);
-                if let (Some(idx), Some(delta)) = (self.selected_layer, result.selected_drag_delta_canvas) {
-                    if let Some(layer) = self.project.layers.get_mut(idx) { layer.transform.x += delta.x; layer.transform.y += delta.y; }
+                if let Some(idx) = self.selected_layer {
+                    if let Some(delta) = result.selected_resize_delta_canvas {
+                        if let Some(layer) = self.project.layers.get_mut(idx) {
+                            let aspect = (layer.transform.w / layer.transform.h.max(1.0)).max(0.01);
+                            if delta.x.abs() >= delta.y.abs() {
+                                layer.transform.w = (layer.transform.w + delta.x).max(8.0);
+                                layer.transform.h = (layer.transform.w / aspect).max(8.0);
+                            } else {
+                                layer.transform.h = (layer.transform.h + delta.y).max(8.0);
+                                layer.transform.w = (layer.transform.h * aspect).max(8.0);
+                            }
+                        }
+                    } else if let Some(delta) = result.selected_drag_delta_canvas {
+                        if let Some(layer) = self.project.layers.get_mut(idx) {
+                            layer.transform.x += delta.x;
+                            layer.transform.y += delta.y;
+                        }
+                    }
                 }
             });
         });
@@ -557,6 +597,57 @@ impl InkplainerApp {
         });
     }
 
+    fn projects_window(&mut self, ctx: &egui::Context) {
+        if !self.projects_open { return; }
+        let snapshots = match project_store::list_snapshots() {
+            Ok(v) => v,
+            Err(err) => { self.status = format!("Projects list failed: {err:#}"); Vec::new() }
+        };
+        let usage = project_store::storage_usage_bytes().unwrap_or(0);
+        let mut open = self.projects_open;
+        let mut open_path = None;
+        let mut delete_path = None;
+        egui::Window::new("Projects").open(&mut open).default_size([620.0, 420.0]).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.strong(format!("{} auto-saved project snapshot(s)", snapshots.len()));
+                ui.separator();
+                ui.label(format!("Storage: {}", format_bytes(usage)));
+            });
+            ui.separator();
+            if snapshots.is_empty() {
+                ui.label("No project snapshots yet. Auto-save creates snapshots while a project changes.");
+            } else {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for item in &snapshots {
+                        ui.horizontal(|ui| {
+                            ui.label(&item.name);
+                            ui.small(format_bytes(item.size_bytes));
+                            if ui.small_button("Open").clicked() { open_path = Some(item.path.clone()); }
+                            if ui.small_button("Delete").clicked() { delete_path = Some(item.path.clone()); }
+                        });
+                        ui.separator();
+                    }
+                });
+            }
+        });
+        self.projects_open = open;
+        if let Some(path) = delete_path {
+            match project_store::delete_snapshot(&path) {
+                Ok(()) => self.status = format!("Deleted {}", path.display()),
+                Err(err) => self.status = format!("Delete failed: {err:#}"),
+            }
+        }
+        if let Some(path) = open_path {
+            match project_store::load_snapshot(&path) {
+                Ok(project) => {
+                    self.install_project(ctx, project, None);
+                    self.projects_open = false;
+                }
+                Err(err) => self.status = format!("Open stored project failed: {err:#}"),
+            }
+        }
+    }
+
     fn slicer_window(&mut self, ctx: &egui::Context) {
         if !self.slicer.open { return; }
         let Some(idx) = self.selected_image() else { self.slicer.open = false; return; };
@@ -566,7 +657,8 @@ impl InkplainerApp {
         let image_aspect = runtime.rgba.width().max(1) as f32 / runtime.rgba.height().max(1) as f32;
         let mut apply = false;
         let mut cancel = false;
-        egui::Window::new("Slicer").open(&mut self.slicer.open).resizable(true).default_size([700.0, 650.0]).show(ctx, |ui| {
+        let mut window_open = self.slicer.open;
+        egui::Window::new("Slicer").open(&mut window_open).resizable(true).default_size([700.0, 650.0]).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.slicer.mode, SliceMode::Grid, "Grid");
                 ui.selectable_value(&mut self.slicer.mode, SliceMode::Rectangles, "Rectangles");
@@ -577,9 +669,12 @@ impl InkplainerApp {
                     ui.horizontal(|ui| { ui.add(egui::Slider::new(&mut self.slicer.cols, 1..=8).text("Columns")); ui.add(egui::Slider::new(&mut self.slicer.rows, 1..=8).text("Rows")); });
                 }
                 SliceMode::Rectangles => {
-                    ui.label("Regions use normalized X/Y/W/H values (0–1).");
+                    ui.label("Drag directly on the preview, or enter normalized X/Y/W/H values.");
                     ui.horizontal(|ui| {
-                        for (i, label) in ["X", "Y", "W", "H"].iter().enumerate() { ui.label(*label); ui.add(egui::DragValue::new(&mut self.slicer.rect_editor[i]).speed(0.01).range(0.0..=1.0)); }
+                        for (i, label) in ["X", "Y", "W", "H"].iter().enumerate() {
+                            ui.label(*label);
+                            ui.add(egui::DragValue::new(&mut self.slicer.rect_editor[i]).speed(0.01).range(0.0..=1.0));
+                        }
                     });
                     if ui.button("Add region").clicked() {
                         self.slicer.rects.push(NormalizedRect { x: self.slicer.rect_editor[0], y: self.slicer.rect_editor[1], w: self.slicer.rect_editor[2], h: self.slicer.rect_editor[3] }.clamped());
@@ -602,18 +697,44 @@ impl InkplainerApp {
             ui.painter().image(texture, rect, egui::Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
 
             if self.slicer.mode == SliceMode::Grid {
-                for c in 1..self.slicer.cols { let x = rect.left() + rect.width() * c as f32 / self.slicer.cols as f32; ui.painter().line_segment([Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())], Stroke::new(1.0, Color32::LIGHT_BLUE)); }
-                for r in 1..self.slicer.rows { let y = rect.top() + rect.height() * r as f32 / self.slicer.rows as f32; ui.painter().line_segment([Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)], Stroke::new(1.0, Color32::LIGHT_BLUE)); }
+                for c in 1..self.slicer.cols {
+                    let x = rect.left() + rect.width() * c as f32 / self.slicer.cols as f32;
+                    ui.painter().line_segment([Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())], Stroke::new(1.0, Color32::LIGHT_BLUE));
+                }
+                for r in 1..self.slicer.rows {
+                    let y = rect.top() + rect.height() * r as f32 / self.slicer.rows as f32;
+                    ui.painter().line_segment([Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)], Stroke::new(1.0, Color32::LIGHT_BLUE));
+                }
             } else if self.slicer.mode == SliceMode::Rectangles {
+                if response.drag_started() {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        let p = normalized_pointer(rect, pos);
+                        self.slicer.rect_drag_start = Some(p);
+                        self.slicer.rect_drag_current = Some(p);
+                    }
+                }
+                if response.dragged() {
+                    if let Some(pos) = response.interact_pointer_pos() { self.slicer.rect_drag_current = Some(normalized_pointer(rect, pos)); }
+                }
+                if ui.input(|i| i.pointer.any_released()) {
+                    if let (Some(a), Some(b)) = (self.slicer.rect_drag_start.take(), self.slicer.rect_drag_current.take()) {
+                        let region = normalized_rect_from_points(a, b);
+                        if region.w > 0.005 && region.h > 0.005 { self.slicer.rects.push(region); }
+                    }
+                }
                 for r in &self.slicer.rects {
-                    let rr = egui::Rect::from_min_size(Pos2::new(rect.left() + r.x * rect.width(), rect.top() + r.y * rect.height()), Vec2::new(r.w * rect.width(), r.h * rect.height()));
-                    ui.painter().rect_stroke(rr, 0.0, Stroke::new(2.0, Color32::YELLOW), egui::StrokeKind::Inside);
+                    paint_slice_rect(ui, rect, *r, Color32::YELLOW);
+                }
+                if let (Some(a), Some(b)) = (self.slicer.rect_drag_start, self.slicer.rect_drag_current) {
+                    paint_slice_rect(ui, rect, normalized_rect_from_points(a, b), Color32::LIGHT_GREEN);
                 }
             } else {
                 if response.dragged() {
                     if let Some(pos) = response.interact_pointer_pos() {
-                        let p = [((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0), ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0)];
-                        let push = self.slicer.freehand.last().map(|last| { let dx = last[0] - p[0]; let dy = last[1] - p[1]; dx * dx + dy * dy > 0.00008 }).unwrap_or(true);
+                        let p = normalized_pointer(rect, pos);
+                        let push = self.slicer.freehand.last().map(|last| {
+                            let dx = last[0] - p[0]; let dy = last[1] - p[1]; dx * dx + dy * dy > 0.00008
+                        }).unwrap_or(true);
                         if push { self.slicer.freehand.push(p); }
                     }
                 }
@@ -629,6 +750,7 @@ impl InkplainerApp {
                 if ui.button("Cancel").clicked() { cancel = true; }
             });
         });
+        self.slicer.open = window_open;
         if cancel { self.slicer.open = false; }
         if apply { self.apply_slice(ctx, idx); }
     }
@@ -674,6 +796,7 @@ impl eframe::App for InkplainerApp {
         self.settings_panel(ctx);
         self.center_canvas(ctx);
         self.slicer_window(ctx);
+        self.projects_window(ctx);
         self.maybe_autosave();
 
         if !self.suppress_history_once && fingerprint(&before) != fingerprint(&self.project) {
@@ -752,6 +875,37 @@ fn set_export_resolution(project: &mut Project, base: u32) {
         project.export.height = base;
         project.export.width = (base as f32 * cw / ch).round() as u32;
     }
+}
+
+fn normalized_pointer(rect: egui::Rect, pos: Pos2) -> [f32; 2] {
+    [((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0), ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0)]
+}
+
+fn normalized_rect_from_points(a: [f32; 2], b: [f32; 2]) -> NormalizedRect {
+    let x0 = a[0].min(b[0]);
+    let y0 = a[1].min(b[1]);
+    let x1 = a[0].max(b[0]);
+    let y1 = a[1].max(b[1]);
+    NormalizedRect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }.clamped()
+}
+
+fn paint_slice_rect(ui: &egui::Ui, preview: egui::Rect, region: NormalizedRect, color: Color32) {
+    let rr = egui::Rect::from_min_size(
+        Pos2::new(preview.left() + region.x * preview.width(), preview.top() + region.y * preview.height()),
+        Vec2::new(region.w * preview.width(), region.h * preview.height()),
+    );
+    ui.painter().rect_stroke(rr, 0.0, Stroke::new(2.0, color), egui::StrokeKind::Inside);
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    let b = bytes as f64;
+    if b >= GB { format!("{:.2} GB", b / GB) }
+    else if b >= MB { format!("{:.1} MB", b / MB) }
+    else if b >= KB { format!("{:.1} KB", b / KB) }
+    else { format!("{bytes} B") }
 }
 
 fn fingerprint(project: &Project) -> String {
