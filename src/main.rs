@@ -12,6 +12,9 @@ mod project_io;
 mod render;
 mod slicer;
 
+#[cfg(test)]
+mod regression_tests;
+
 use app::InkplainerApp;
 use eframe::egui;
 
