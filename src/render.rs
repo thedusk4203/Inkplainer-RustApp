@@ -1,8 +1,9 @@
-use eframe::egui::{self, Align2, Color32, FontFamily, FontId, Pos2, Rect, Stroke, StrokeKind, Vec2};
+use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
 use crate::animation::{layer_progress, reveal_regions, RevealRegion};
 use crate::assets::{RuntimeAssets, RuntimeImage};
 use crate::effects::select_edge_path;
+use crate::font_catalog;
 use crate::model::{
     AnimationStyle, Background, ColoringStyle, HandStyle, Layer, LayerContent, Project,
     RevealStyle, StrokeStyle, TextAlign, TextDirection, TextDrawStyle,
@@ -150,7 +151,10 @@ fn paint_text_layer(
         TextAlign::Right => Pos2::new(layer_rect.right(), layer_rect.center().y),
     };
     let scale = canvas_rect.width() / project.canvas.width.max(1) as f32;
-    let font = FontId::new((text.size * scale).max(8.0), FontFamily::Proportional);
+    let font = FontId::new(
+        (text.size * scale).max(8.0),
+        font_catalog::egui_family(&text.font_family, text.bold, text.italic),
+    );
 
     if layer.animation.style == AnimationStyle::TextDraw {
         let clip = directional_clip(layer_rect, progress, layer.animation.text_direction);
