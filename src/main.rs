@@ -1,6 +1,7 @@
 mod animation;
 mod app;
 mod assets;
+mod effects;
 mod export;
 mod model;
 mod project_io;
