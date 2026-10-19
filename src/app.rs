@@ -23,6 +23,7 @@ struct SlicerState {
     rows: u32,
     rects: Vec<NormalizedRect>,
     rect_editor: [f32; 4],
+    rect_drag_start: Option<[f32; 2]>,
     freehand: Vec<[f32; 2]>,
 }
 
@@ -35,6 +36,7 @@ impl Default for SlicerState {
             rows: 2,
             rects: Vec::new(),
             rect_editor: [0.1, 0.1, 0.4, 0.4],
+            rect_drag_start: None,
             freehand: Vec::new(),
         }
     }
@@ -539,6 +541,38 @@ impl InkplainerApp {
                 if let (Some(idx), Some(delta)) = (self.selected_layer, result.selected_drag_delta_canvas) {
                     if let Some(layer) = self.project.layers.get_mut(idx) { layer.transform.x += delta.x; layer.transform.y += delta.y; }
                 }
+                if let (Some(idx), Some(resize)) = (self.selected_layer, result.selected_resize_delta) {
+                    if let Some(layer) = self.project.layers.get_mut(idx) {
+                        const MIN_SIZE: f32 = 12.0;
+                        let t = &mut layer.transform;
+                        match resize.handle {
+                            render::ResizeHandle::TopLeft => {
+                                let new_w = (t.w - resize.delta_canvas.x).max(MIN_SIZE);
+                                let new_h = (t.h - resize.delta_canvas.y).max(MIN_SIZE);
+                                t.x += t.w - new_w;
+                                t.y += t.h - new_h;
+                                t.w = new_w;
+                                t.h = new_h;
+                            }
+                            render::ResizeHandle::TopRight => {
+                                let new_h = (t.h - resize.delta_canvas.y).max(MIN_SIZE);
+                                t.y += t.h - new_h;
+                                t.w = (t.w + resize.delta_canvas.x).max(MIN_SIZE);
+                                t.h = new_h;
+                            }
+                            render::ResizeHandle::BottomLeft => {
+                                let new_w = (t.w - resize.delta_canvas.x).max(MIN_SIZE);
+                                t.x += t.w - new_w;
+                                t.w = new_w;
+                                t.h = (t.h + resize.delta_canvas.y).max(MIN_SIZE);
+                            }
+                            render::ResizeHandle::BottomRight => {
+                                t.w = (t.w + resize.delta_canvas.x).max(MIN_SIZE);
+                                t.h = (t.h + resize.delta_canvas.y).max(MIN_SIZE);
+                            }
+                        }
+                    }
+                }
             });
         });
     }
@@ -577,16 +611,16 @@ impl InkplainerApp {
                     ui.horizontal(|ui| { ui.add(egui::Slider::new(&mut self.slicer.cols, 1..=8).text("Columns")); ui.add(egui::Slider::new(&mut self.slicer.rows, 1..=8).text("Rows")); });
                 }
                 SliceMode::Rectangles => {
-                    ui.label("Regions use normalized X/Y/W/H values (0–1).");
+                    ui.label("Drag directly on the preview to add regions, or enter normalized X/Y/W/H values (0–1).");
                     ui.horizontal(|ui| {
                         for (i, label) in ["X", "Y", "W", "H"].iter().enumerate() { ui.label(*label); ui.add(egui::DragValue::new(&mut self.slicer.rect_editor[i]).speed(0.01).range(0.0..=1.0)); }
                     });
-                    if ui.button("Add region").clicked() {
+                    if ui.button("Add numeric region").clicked() {
                         self.slicer.rects.push(NormalizedRect { x: self.slicer.rect_editor[0], y: self.slicer.rect_editor[1], w: self.slicer.rect_editor[2], h: self.slicer.rect_editor[3] }.clamped());
                     }
                     ui.horizontal_wrapped(|ui| {
                         ui.label(format!("{} region(s)", self.slicer.rects.len()));
-                        if ui.small_button("Clear").clicked() { self.slicer.rects.clear(); }
+                        if ui.small_button("Clear").clicked() { self.slicer.rects.clear(); self.slicer.rect_drag_start = None; }
                     });
                 }
                 SliceMode::Freehand => {
@@ -608,6 +642,31 @@ impl InkplainerApp {
                 for r in &self.slicer.rects {
                     let rr = egui::Rect::from_min_size(Pos2::new(rect.left() + r.x * rect.width(), rect.top() + r.y * rect.height()), Vec2::new(r.w * rect.width(), r.h * rect.height()));
                     ui.painter().rect_stroke(rr, 0.0, Stroke::new(2.0, Color32::YELLOW), egui::StrokeKind::Inside);
+                }
+                if response.drag_started() {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        self.slicer.rect_drag_start = Some([((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0), ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0)]);
+                    }
+                }
+                if let (Some(start), Some(pos)) = (self.slicer.rect_drag_start, response.interact_pointer_pos()) {
+                    let end = [((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0), ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0)];
+                    let x0 = start[0].min(end[0]);
+                    let y0 = start[1].min(end[1]);
+                    let x1 = start[0].max(end[0]);
+                    let y1 = start[1].max(end[1]);
+                    let live = egui::Rect::from_min_max(
+                        Pos2::new(rect.left() + x0 * rect.width(), rect.top() + y0 * rect.height()),
+                        Pos2::new(rect.left() + x1 * rect.width(), rect.top() + y1 * rect.height()),
+                    );
+                    ui.painter().rect_stroke(live, 0.0, Stroke::new(2.0, Color32::LIGHT_GREEN), egui::StrokeKind::Inside);
+                    if response.drag_stopped() {
+                        let w = x1 - x0;
+                        let h = y1 - y0;
+                        if w > 0.005 && h > 0.005 {
+                            self.slicer.rects.push(NormalizedRect { x: x0, y: y0, w, h }.clamped());
+                        }
+                        self.slicer.rect_drag_start = None;
+                    }
                 }
             } else {
                 if response.dragged() {
