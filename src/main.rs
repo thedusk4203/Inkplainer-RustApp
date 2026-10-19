@@ -5,6 +5,7 @@ mod effects;
 mod export;
 mod export_worker;
 mod font_catalog;
+mod hand_assets;
 mod model;
 mod native_mp4;
 mod native_webm;
