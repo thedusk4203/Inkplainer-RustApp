@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use crate::model::{
     AnimationStyle, Background, ColoringStyle, DetectionAlgorithm, ExportFormat, HandStyle,
-    LayerContent, RevealStyle, StrokeStyle, TextDirection, TextDrawStyle,
+    LayerContent, RevealStyle, StrokeStyle, TextAlign, TextDirection, TextDrawStyle,
 };
 use crate::render;
 
@@ -113,6 +113,9 @@ fn top_bar(app: &mut InkplainerApp, ctx: &egui::Context) {
                 ui.label(RichText::new("Inkplainer").size(20.0).strong());
                 ui.separator();
 
+                if ui.button("New").clicked() {
+                    app.new_project();
+                }
                 if ui.button("Projects").clicked() {
                     app.open_project_browser();
                 }
@@ -122,8 +125,21 @@ fn top_bar(app: &mut InkplainerApp, ctx: &egui::Context) {
                 if ui.button("Save").clicked() {
                     app.save_project();
                 }
+                ui.menu_button("More", |ui| {
+                    if ui.button("Save As…").clicked() {
+                        app.save_project_as();
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(app.autosave_available, egui::Button::new("Restore Autosave"))
+                        .clicked()
+                    {
+                        app.restore_autosave(ctx);
+                        ui.close();
+                    }
+                });
                 ui.add_sized(
-                    [180.0, 28.0],
+                    [160.0, 28.0],
                     egui::TextEdit::singleline(&mut app.project.name).hint_text("Untitled Project"),
                 );
 
@@ -274,7 +290,7 @@ fn left_panel(app: &mut InkplainerApp, ctx: &egui::Context, tab: &mut LeftPanelT
                                         .text("Reveal speed"),
                                 );
                                 ui.add(
-                                    egui::Slider::new(&mut layer.animation.hand_speed, 1.0..=30.0)
+                                    egui::Slider::new(&mut layer.animation.hand_speed, 1.0..=20.0)
                                         .text("Hand speed"),
                                 );
                                 egui::ComboBox::from_id_salt("native_hand_style")
@@ -397,6 +413,23 @@ fn left_panel(app: &mut InkplainerApp, ctx: &egui::Context, tab: &mut LeftPanelT
                                     )
                                     .text("Opacity"),
                                 );
+                                let mut outline_color = Color32::from_rgba_unmultiplied(
+                                    layer.animation.outline_color[0],
+                                    layer.animation.outline_color[1],
+                                    layer.animation.outline_color[2],
+                                    layer.animation.outline_color[3],
+                                );
+                                ui.horizontal(|ui| {
+                                    ui.label("Outline color");
+                                    if ui.color_edit_button_srgba(&mut outline_color).changed() {
+                                        layer.animation.outline_color = [
+                                            outline_color.r(),
+                                            outline_color.g(),
+                                            outline_color.b(),
+                                            outline_color.a(),
+                                        ];
+                                    }
+                                });
                                 ui.checkbox(
                                     &mut layer.animation.outline_visible,
                                     "Show outlines on export",
@@ -586,7 +619,11 @@ fn right_panel(app: &mut InkplainerApp, ctx: &egui::Context, mode: &mut InputMod
                                 ui.add_space(6.0);
                                 ui.text_edit_multiline(&mut text.text);
                                 egui::ComboBox::from_id_salt("native_font_family")
-                                    .selected_text(&text.font_family)
+                                    .selected_text(if text.font_family.trim().is_empty() {
+                                        "Segoe UI"
+                                    } else {
+                                        &text.font_family
+                                    })
                                     .width(ui.available_width())
                                     .show_ui(ui, |ui| {
                                         egui::ScrollArea::vertical()
@@ -601,6 +638,10 @@ fn right_panel(app: &mut InkplainerApp, ctx: &egui::Context, mode: &mut InputMod
                                                 }
                                             });
                                     });
+                                ui.horizontal(|ui| {
+                                    ui.label("Custom family");
+                                    ui.text_edit_singleline(&mut text.font_family);
+                                });
                                 ui.add(
                                     egui::Slider::new(&mut text.size, 10.0..=400.0).text("px"),
                                 );
@@ -608,6 +649,26 @@ fn right_panel(app: &mut InkplainerApp, ctx: &egui::Context, mode: &mut InputMod
                                     ui.checkbox(&mut text.bold, "Bold");
                                     ui.checkbox(&mut text.italic, "Italic");
                                 });
+                                egui::ComboBox::from_id_salt("native_text_align")
+                                    .selected_text(match text.align {
+                                        TextAlign::Left => "Left",
+                                        TextAlign::Center => "Center",
+                                        TextAlign::Right => "Right",
+                                    })
+                                    .width(ui.available_width())
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut text.align, TextAlign::Left, "Left");
+                                        ui.selectable_value(
+                                            &mut text.align,
+                                            TextAlign::Center,
+                                            "Center",
+                                        );
+                                        ui.selectable_value(
+                                            &mut text.align,
+                                            TextAlign::Right,
+                                            "Right",
+                                        );
+                                    });
                                 ui.add(
                                     egui::Slider::new(&mut text.line_height, 0.8..=2.5)
                                         .text("Line height"),
@@ -616,6 +677,18 @@ fn right_panel(app: &mut InkplainerApp, ctx: &egui::Context, mode: &mut InputMod
                                     egui::Slider::new(&mut text.letter_spacing, -5.0..=30.0)
                                         .text("Spacing"),
                                 );
+                                let mut color = Color32::from_rgba_unmultiplied(
+                                    text.color[0],
+                                    text.color[1],
+                                    text.color[2],
+                                    text.color[3],
+                                );
+                                ui.horizontal(|ui| {
+                                    ui.label("Text color");
+                                    if ui.color_edit_button_srgba(&mut color).changed() {
+                                        text.color = [color.r(), color.g(), color.b(), color.a()];
+                                    }
+                                });
                             }
                         }
                     }
@@ -678,6 +751,7 @@ fn right_panel(app: &mut InkplainerApp, ctx: &egui::Context, mode: &mut InputMod
                             });
 
                             if selected {
+                                ui.text_edit_singleline(&mut layer.name);
                                 ui.horizontal(|ui| {
                                     if ui.small_button("↑").clicked() {
                                         move_up = Some(index);
@@ -685,13 +759,29 @@ fn right_panel(app: &mut InkplainerApp, ctx: &egui::Context, mode: &mut InputMod
                                     if ui.small_button("↓").clicked() {
                                         move_down = Some(index);
                                     }
+                                    let mut enabled = layer.anim_order.is_some();
                                     let mut order = layer.anim_order.unwrap_or(1);
                                     ui.label("Order");
-                                    if ui
-                                        .add(egui::DragValue::new(&mut order).range(1..=999))
-                                        .changed()
+                                    if ui.checkbox(&mut enabled, "").changed() {
+                                        layer.anim_order = enabled.then_some(order.max(1));
+                                    }
+                                    if enabled
+                                        && ui
+                                            .add(egui::DragValue::new(&mut order).range(1..=999))
+                                            .changed()
                                     {
                                         layer.anim_order = Some(order.max(1));
+                                    }
+                                });
+                                let mut group = layer.group.clone().unwrap_or_default();
+                                ui.horizontal(|ui| {
+                                    ui.label("Group");
+                                    if ui.text_edit_singleline(&mut group).changed() {
+                                        layer.group = if group.trim().is_empty() {
+                                            None
+                                        } else {
+                                            Some(group.clone())
+                                        };
                                     }
                                 });
                                 ui.add(
@@ -711,11 +801,15 @@ fn right_panel(app: &mut InkplainerApp, ctx: &egui::Context, mode: &mut InputMod
                                 ui.horizontal(|ui| {
                                     ui.label("W");
                                     ui.add(
-                                        egui::DragValue::new(&mut layer.transform.w).speed(1.0),
+                                        egui::DragValue::new(&mut layer.transform.w)
+                                            .speed(1.0)
+                                            .range(1.0..=10000.0),
                                     );
                                     ui.label("H");
                                     ui.add(
-                                        egui::DragValue::new(&mut layer.transform.h).speed(1.0),
+                                        egui::DragValue::new(&mut layer.transform.h)
+                                            .speed(1.0)
+                                            .range(1.0..=10000.0),
                                     );
                                 });
                             }
@@ -932,7 +1026,7 @@ fn bottom_bar(app: &mut InkplainerApp, ctx: &egui::Context) {
                                 .text("Reveal"),
                         );
                         columns[1].add(
-                            egui::Slider::new(&mut layer.animation.hand_speed, 1.0..=30.0)
+                            egui::Slider::new(&mut layer.animation.hand_speed, 1.0..=20.0)
                                 .text("Hand"),
                         );
                     }
@@ -960,13 +1054,16 @@ fn bottom_bar(app: &mut InkplainerApp, ctx: &egui::Context) {
                     }
                 });
                 columns[2].horizontal(|ui| {
-                    ui.label(
-                        RichText::new(format!(
-                            "{} × {}",
-                            app.project.canvas.width, app.project.canvas.height
-                        ))
-                        .size(9.0)
-                        .color(Color32::from_gray(105)),
+                    ui.add(
+                        egui::DragValue::new(&mut app.project.canvas.width)
+                            .range(320..=3840)
+                            .speed(1.0),
+                    );
+                    ui.label("×");
+                    ui.add(
+                        egui::DragValue::new(&mut app.project.canvas.height)
+                            .range(240..=3840)
+                            .speed(1.0),
                     );
                     ui.checkbox(&mut app.project.hand_glide_enabled, "Smooth hand");
                 });
