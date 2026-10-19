@@ -238,7 +238,7 @@ fn paint_text_layer(
     );
     let scale = canvas_rect.width() / project.canvas.width.max(1) as f32;
     let font = FontId::new(
-        (text.size * scale).max(8.0),
+        (text.size.max(8.0) * scale).max(1.0),
         font_catalog::egui_family(&text.font_family, text.bold, text.italic),
     );
 
@@ -259,11 +259,12 @@ fn paint_text_layer(
                     layer.animation.outline_color[2],
                     layer.animation.outline_color[3],
                 );
+                let outline_step = scale.max(0.1);
                 for offset in [
-                    Vec2::new(-1.0, 0.0),
-                    Vec2::new(1.0, 0.0),
-                    Vec2::new(0.0, -1.0),
-                    Vec2::new(0.0, 1.0),
+                    Vec2::new(-outline_step, 0.0),
+                    Vec2::new(outline_step, 0.0),
+                    Vec2::new(0.0, -outline_step),
+                    Vec2::new(0.0, outline_step),
                 ] {
                     paint_text_layout(
                         &clipped,
@@ -292,7 +293,7 @@ fn paint_text_layout(
     offset: Vec2,
 ) {
     let lines: Vec<&str> = text.text.lines().collect();
-    let line_height = (text.size * text.line_height.max(0.8) * scale).max(font.size);
+    let line_height = ((text.size * text.line_height.max(0.8)).round() * scale).max(1.0);
     let total_height = line_height * lines.len().max(1) as f32;
     let mut y = layer_rect.top() + ((layer_rect.height() - total_height) * 0.5).max(0.0);
     let letter_spacing = text.letter_spacing * scale;
@@ -302,8 +303,10 @@ fn paint_text_layout(
         let base_width = line_galley.size().x;
         let x = match text.align {
             TextAlign::Left => layer_rect.left(),
-            TextAlign::Center => layer_rect.left() + ((layer_rect.width() - base_width) * 0.5).max(0.0),
-            TextAlign::Right => layer_rect.right() - base_width,
+            TextAlign::Center => {
+                layer_rect.left() + ((layer_rect.width() - base_width) * 0.5).max(0.0)
+            }
+            TextAlign::Right => (layer_rect.right() - base_width).max(layer_rect.left()),
         };
 
         if letter_spacing.abs() < 0.01 {
@@ -631,8 +634,10 @@ fn paint_edge_path(
             * layer.animation.outline_opacity)
             .clamp(0.0, 255.0) as u8,
     );
-    let scale = rect.width().max(rect.height()) / 1000.0;
-    let thickness = (layer.animation.outline_thickness * scale.max(0.55)).max(0.5);
+    let sx = rect.width() / layer.transform.w.max(1.0);
+    let sy = rect.height() / layer.transform.h.max(1.0);
+    let preview_scale = (sx * sy).sqrt().max(0.001);
+    let thickness = (layer.animation.outline_thickness * preview_scale).max(0.5);
     let max_jump = rect.width().max(rect.height()) * 0.09;
 
     for (index, pair) in points[..count].windows(2).enumerate() {
@@ -666,7 +671,8 @@ fn paint_edge_path(
                 );
             }
             StrokeStyle::Sketch => {
-                for offset in [-1.5_f32, -0.5, 0.5, 1.5] {
+                for canvas_offset in [-1.5_f32, -0.5, 0.5, 1.5] {
+                    let offset = canvas_offset * preview_scale;
                     painter.line_segment(
                         [
                             a + Vec2::new(offset, -offset * 0.4),
@@ -914,8 +920,7 @@ fn to_screen_rect(canvas_rect: Rect, project: &Project, layer: &Layer) -> Rect {
 }
 
 fn paint_background(painter: &egui::Painter, rect: Rect, project: &Project) {
-    let bg = &project.canvas.background;
-    match bg {
+    match &project.canvas.background {
         Background::Solid(color) => {
             painter.rect_filled(
                 rect,
