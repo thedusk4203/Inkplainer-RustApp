@@ -61,15 +61,17 @@ pub fn reveal_regions(layer: &Layer, progress: f32) -> Vec<RevealRegion> {
 
     match layer.animation.style {
         AnimationStyle::Scanner => scanner_regions(p, layer.animation.zigzag),
-        AnimationStyle::ChunkJump | AnimationStyle::OutlineChunks => {
-            chunk_regions(layer, p, Priority::Random)
-        }
+        AnimationStyle::ChunkJump | AnimationStyle::OutlineChunks => chunk_regions(layer, p, Priority::Random),
+        AnimationStyle::Scribble => chunk_regions(layer, p, Priority::Scribble),
+        AnimationStyle::Nervous => nervous_regions(layer, p),
+        AnimationStyle::TopAnchor => top_anchor_regions(layer, p),
         AnimationStyle::Human => chunk_regions(layer, p, Priority::Human),
         AnimationStyle::Animal | AnimationStyle::Vehicle => chunk_regions(layer, p, Priority::LeftToRight),
         AnimationStyle::Portrait => chunk_regions(layer, p, Priority::CenterOut),
         AnimationStyle::Building => chunk_regions(layer, p, Priority::BottomUp),
         AnimationStyle::Landscape => chunk_regions(layer, p, Priority::TopDown),
         AnimationStyle::Spiral => chunk_regions(layer, p, Priority::Spiral),
+        AnimationStyle::Nature => chunk_regions(layer, p, Priority::Nature),
         AnimationStyle::Contour
         | AnimationStyle::OutlineFill
         | AnimationStyle::IllustFill
@@ -84,13 +86,11 @@ fn scanner_regions(progress: f32, zigzag: bool) -> Vec<RevealRegion> {
     let full_bands = scaled.floor() as usize;
     let partial = scaled.fract();
     let mut out = Vec::with_capacity(full_bands + 1);
-
     for band in 0..full_bands.min(BANDS) {
         let v0 = band as f32 / BANDS as f32;
         let v1 = (band + 1) as f32 / BANDS as f32;
         out.push(RevealRegion { u0: 0.0, v0, u1: 1.0, v1 });
     }
-
     if full_bands < BANDS && partial > 0.0 {
         let v0 = full_bands as f32 / BANDS as f32;
         let v1 = (full_bands + 1) as f32 / BANDS as f32;
@@ -99,6 +99,47 @@ fn scanner_regions(progress: f32, zigzag: bool) -> Vec<RevealRegion> {
         } else {
             out.push(RevealRegion { u0: 0.0, v0, u1: partial, v1 });
         }
+    }
+    out
+}
+
+fn nervous_regions(layer: &Layer, progress: f32) -> Vec<RevealRegion> {
+    let rows = 64usize;
+    let seed = stable_hash(&layer.id);
+    let mut order: Vec<usize> = (0..rows).collect();
+    order.sort_by_key(|row| mix64(seed ^ (*row as u64).wrapping_mul(0x9e3779b97f4a7c15)));
+    // Preserve a generally top-to-bottom build but create small hesitant excursions.
+    order.sort_by(|a, b| {
+        let ja = (*a as f32 + (pseudo(seed, *a as u64) - 0.5) * 7.0).max(0.0);
+        let jb = (*b as f32 + (pseudo(seed, *b as u64) - 0.5) * 7.0).max(0.0);
+        ja.partial_cmp(&jb).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let count = ((rows as f32 * progress).ceil() as usize).min(rows);
+    order.into_iter().take(count).map(|row| RevealRegion {
+        u0: 0.0,
+        v0: row as f32 / rows as f32,
+        u1: 1.0,
+        v1: (row + 1) as f32 / rows as f32,
+    }).collect()
+}
+
+fn top_anchor_regions(layer: &Layer, progress: f32) -> Vec<RevealRegion> {
+    let cols = layer.animation.chunks.clamp(12, 80) as usize;
+    let full = progress * cols as f32;
+    let full_cols = full.floor() as usize;
+    let partial = full.fract();
+    let seed = stable_hash(&layer.id);
+    let mut order: Vec<usize> = (0..cols).collect();
+    order.sort_by_key(|col| mix64(seed ^ *col as u64));
+    let mut out = Vec::new();
+    for col in order.iter().take(full_cols.min(cols)) {
+        let u0 = *col as f32 / cols as f32;
+        out.push(RevealRegion { u0, v0: 0.0, u1: (*col + 1) as f32 / cols as f32, v1: 1.0 });
+    }
+    if full_cols < cols && partial > 0.0 {
+        let col = order[full_cols];
+        let u0 = col as f32 / cols as f32;
+        out.push(RevealRegion { u0, v0: 0.0, u1: (col + 1) as f32 / cols as f32, v1: partial });
     }
     out
 }
@@ -112,6 +153,8 @@ enum Priority {
     BottomUp,
     TopDown,
     Spiral,
+    Scribble,
+    Nature,
 }
 
 #[derive(Debug, Clone)]
@@ -132,12 +175,10 @@ fn chunk_regions(layer: &Layer, progress: f32, priority: Priority) -> Vec<Reveal
         for col in 0..cols {
             let cx = (col as f32 + 0.5) / cols as f32;
             let cy = (row as f32 + 0.5) / rows as f32;
+            let noise = pseudo(seed, row as u64 * 131 + col as u64);
             let score = match priority {
-                Priority::Random => pseudo(seed, row as u64 * 131 + col as u64),
-                Priority::Human => {
-                    let center_bias = (cx - 0.5).abs() * 0.18;
-                    cy + center_bias
-                }
+                Priority::Random => noise,
+                Priority::Human => cy + (cx - 0.5).abs() * 0.18,
                 Priority::LeftToRight => cx + cy * 0.08,
                 Priority::CenterOut => ((cx - 0.5).powi(2) + (cy - 0.45).powi(2)).sqrt(),
                 Priority::BottomUp => (1.0 - cy) + (cx - 0.5).abs() * 0.04,
@@ -149,6 +190,12 @@ fn chunk_regions(layer: &Layer, progress: f32, priority: Priority) -> Vec<Reveal
                     let angle = dy.atan2(dx) / std::f32::consts::TAU + 0.5;
                     radius + angle * 0.20
                 }
+                Priority::Scribble => {
+                    let dx = cx - 0.5;
+                    let dy = cy - 0.5;
+                    (dx * dx + dy * dy).sqrt() + noise * 0.45
+                }
+                Priority::Nature => cy * 0.50 + (cx - 0.5).abs() * 0.15 + noise * 0.35,
             };
             tiles.push(Tile {
                 region: RevealRegion {
@@ -169,7 +216,6 @@ fn chunk_regions(layer: &Layer, progress: f32, priority: Priority) -> Vec<Reveal
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.tie.cmp(&b.tie))
     });
-
     let visible = ((tiles.len() as f32 * progress).ceil() as usize).min(tiles.len());
     tiles.into_iter().take(visible).map(|t| t.region).collect()
 }
