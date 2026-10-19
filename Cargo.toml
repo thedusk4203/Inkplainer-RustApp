@@ -1,0 +1,27 @@
+[package]
+name = "inkplainer-rustapp"
+version = "0.1.0"
+edition = "2024"
+authors = ["Inkplainer-RustApp contributors"]
+description = "Native Windows Rust port of Inkplainer-OS"
+license = "Apache-2.0"
+repository = "https://github.com/thedusk4203/Inkplainer-RustApp"
+
+[dependencies]
+eframe = { version = "0.37", features = ["persistence"] }
+egui_extras = { version = "0.37", features = ["image"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+rfd = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+anyhow = "1"
+thiserror = "2"
+imageproc = "0.27"
+ab_glyph = "0.2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
