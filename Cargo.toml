@@ -22,6 +22,8 @@ ab_glyph = "0.2"
 fontdb = "0.24"
 rusty_h264 = "0.16.1"
 mp4io = "0.1.2"
+rav1e = { version = "0.8.1", default-features = false, features = ["threading"] }
+ebml-webm = "0.2.1"
 
 [profile.release]
 lto = "thin"
