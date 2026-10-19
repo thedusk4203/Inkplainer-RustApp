@@ -12,6 +12,7 @@ use crate::model::{
     AnimationStyle, Background, ColoringStyle, HandStyle, Layer, LayerContent, Project,
     RevealStyle, StrokeStyle, TextAlign, TextDirection, TextDrawStyle,
 };
+use crate::timing::hand_motion_progress;
 
 pub fn export_png(project: &Project, assets: &RuntimeAssets, path: &Path) -> Result<()> {
     let frame = render_frame(project, assets, 1.0)?;
@@ -462,14 +463,13 @@ fn fill_rect(img: &mut RgbaImage, x: f32, y: f32, w: f32, h: f32, color: Rgba<u8
 }
 
 fn smoothed_hand_tip(runtime: &RuntimeImage, layer: &Layer, progress: f32) -> (f32, f32) {
-    let speed = (layer.animation.hand_speed / 30.0).clamp(0.0, 1.0);
-    let span = 0.012 + 0.040 * speed;
+    const SMOOTHING_SPAN: f32 = 0.024;
     let mut sx = 0.0;
     let mut sy = 0.0;
     let mut sw = 0.0;
     for sample in 0..6 {
         let t = sample as f32 / 5.0;
-        let p = (progress - span * t).clamp(0.0, 1.0);
+        let p = (progress - SMOOTHING_SPAN * t).clamp(0.0, 1.0);
         let (x, y) = hand_tip(runtime, layer, p);
         let weight = 1.0 - t * 0.65;
         sx += x * weight;
@@ -480,6 +480,7 @@ fn smoothed_hand_tip(runtime: &RuntimeImage, layer: &Layer, progress: f32) -> (f
 }
 
 fn hand_tip(runtime: &RuntimeImage, layer: &Layer, progress: f32) -> (f32, f32) {
+    let progress = hand_motion_progress(progress, layer.animation.hand_speed);
     if matches!(
         layer.animation.style,
         AnimationStyle::Contour
