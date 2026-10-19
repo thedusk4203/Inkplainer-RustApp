@@ -21,8 +21,6 @@ pub fn export_mp4(
         .ceil()
         .max(1.0) as u32;
 
-    // H.264 4:2:0 requires even dimensions. Preserve the requested size as
-    // closely as possible and only round the last pixel when needed.
     let out_w = even(project.export.width.max(320));
     let out_h = even(project.export.height.max(240));
 
@@ -34,7 +32,7 @@ pub fn export_mp4(
     };
     cfg.gop_size = (fps * 2).max(1);
     cfg.mbtree = false;
-    cfg.framerate = fps as f64;
+    cfg.framerate = fps as f32;
     cfg.bitrate = bitrate_for(out_w, out_h, fps, project.export.quality);
 
     let mut encoder = Encoder::new(cfg).map_err(|e| format!("Create H.264 encoder: {e}"))?;
@@ -135,8 +133,6 @@ fn parse_access_unit(data: &[u8]) -> Result<ParsedAccessUnit, String> {
                 is_sync = true;
                 push_avcc_nal(&mut sample, nal)?;
             }
-            // Access-unit delimiters are optional metadata and don't need to be
-            // carried into the MP4 sample. SEI and all coded slices are kept.
             9 => {}
             _ => push_avcc_nal(&mut sample, nal)?,
         }
@@ -155,23 +151,21 @@ fn push_avcc_nal(out: &mut Vec<u8>, nal: &[u8]) -> Result<(), String> {
 }
 
 fn make_avcc(sps: &[u8], pps: &[u8]) -> Result<Vec<u8>, String> {
-    // ISO/IEC 14496-15 AVCDecoderConfigurationRecord. The SPS byte layout is:
-    // NAL header, profile_idc, constraint flags, level_idc, ...
     if sps.len() < 4 || pps.is_empty() {
         return Err("Invalid SPS/PPS returned by H.264 encoder".to_owned());
     }
     let sps_len = u16::try_from(sps.len()).map_err(|_| "SPS is too large".to_owned())?;
     let pps_len = u16::try_from(pps.len()).map_err(|_| "PPS is too large".to_owned())?;
     let mut out = Vec::with_capacity(sps.len() + pps.len() + 16);
-    out.push(1); // configurationVersion
-    out.push(sps[1]); // AVCProfileIndication
-    out.push(sps[2]); // profile_compatibility
-    out.push(sps[3]); // AVCLevelIndication
-    out.push(0xff); // 6 reserved bits + lengthSizeMinusOne=3 (4-byte lengths)
-    out.push(0xe1); // 3 reserved bits + one SPS
+    out.push(1);
+    out.push(sps[1]);
+    out.push(sps[2]);
+    out.push(sps[3]);
+    out.push(0xff);
+    out.push(0xe1);
     out.extend_from_slice(&sps_len.to_be_bytes());
     out.extend_from_slice(sps);
-    out.push(1); // one PPS
+    out.push(1);
     out.extend_from_slice(&pps_len.to_be_bytes());
     out.extend_from_slice(pps);
     Ok(out)
