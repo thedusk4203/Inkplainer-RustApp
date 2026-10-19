@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
-use image::RgbaImage;
+use image::{imageops::FilterType, RgbaImage};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -44,7 +44,12 @@ impl RuntimeAssets {
         for def in hand_assets::definitions() {
             match image::load_from_memory(def.bytes) {
                 Ok(image) => {
-                    let rgba = image.to_rgba8();
+                    let decoded = image.to_rgba8();
+                    let rgba = if decoded.width() == def.width && decoded.height() == def.height {
+                        decoded
+                    } else {
+                        image::imageops::resize(&decoded, def.width, def.height, FilterType::Lanczos3)
+                    };
                     let size = [rgba.width() as usize, rgba.height() as usize];
                     let color = ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
                     let texture = ctx.load_texture(
