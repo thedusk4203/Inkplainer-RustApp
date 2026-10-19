@@ -29,27 +29,28 @@ pub fn install_project_fonts(ctx: &egui::Context, project: &Project) {
     let mut requested = BTreeSet::new();
     for layer in &project.layers {
         if let LayerContent::Text(text) = &layer.content {
-            requested.insert(text.font_family.trim().to_owned());
+            requested.insert((text.font_family.trim().to_owned(), text.bold, text.italic));
         }
     }
     if requested.is_empty() { return; }
 
     let mut definitions = FontDefinitions::default();
-    for family in requested {
-        if family.is_empty() { continue; }
-        let bytes = load_font_bytes(&family, false, false)
-            .or_else(|| load_font_bytes("Segoe UI", false, false))
-            .or_else(|| load_font_bytes("Arial", false, false));
+    for (family, bold, italic) in requested {
+        let requested_family = if family.is_empty() { "Segoe UI" } else { family.as_str() };
+        let bytes = load_font_bytes(requested_family, bold, italic)
+            .or_else(|| load_font_bytes("Segoe UI", bold, italic))
+            .or_else(|| load_font_bytes("Arial", bold, italic));
         let Some(bytes) = bytes else { continue; };
-        let key = egui_family_name(&family);
+        let key = egui_family_name(requested_family, bold, italic);
         definitions.font_data.insert(key.clone(), Arc::new(FontData::from_owned(bytes)));
         definitions.families.insert(FontFamily::Name(key.clone().into()), vec![key]);
     }
     ctx.set_fonts(definitions);
 }
 
-pub fn egui_family(family: &str) -> FontFamily {
-    FontFamily::Name(egui_family_name(family).into())
+pub fn egui_family(family: &str, bold: bool, italic: bool) -> FontFamily {
+    let family = if family.trim().is_empty() { "Segoe UI" } else { family.trim() };
+    FontFamily::Name(egui_family_name(family, bold, italic).into())
 }
 
 pub fn project_font_signature(project: &Project) -> String {
@@ -63,19 +64,24 @@ pub fn project_font_signature(project: &Project) -> String {
     entries.join("|")
 }
 
-fn egui_family_name(family: &str) -> String {
-    format!("inkplainer-font-{}", family.trim().to_lowercase().replace(|c: char| !c.is_ascii_alphanumeric(), "-"))
+fn egui_family_name(family: &str, bold: bool, italic: bool) -> String {
+    let style = match (bold, italic) {
+        (true, true) => "bold-italic",
+        (true, false) => "bold",
+        (false, true) => "italic",
+        (false, false) => "regular",
+    };
+    format!(
+        "inkplainer-font-{}-{style}",
+        family.trim().to_lowercase().replace(|c: char| !c.is_ascii_alphanumeric(), "-")
+    )
 }
 
 fn load_font_bytes(family: &str, bold: bool, italic: bool) -> Option<Vec<u8>> {
     let mut db = Database::new();
     db.load_system_fonts();
     let family = family.trim();
-    let families = if family.is_empty() {
-        vec![Family::SansSerif]
-    } else {
-        vec![Family::Name(family)]
-    };
+    let families = if family.is_empty() { vec![Family::SansSerif] } else { vec![Family::Name(family)] };
     let query = Query {
         families: &families,
         weight: if bold { Weight::BOLD } else { Weight::NORMAL },
@@ -84,10 +90,6 @@ fn load_font_bytes(family: &str, bold: bool, italic: bool) -> Option<Vec<u8>> {
     };
     let id = db.query(&query)?;
     db.with_face_data(id, |data, face_index| {
-        // ab_glyph currently consumes a single-face OpenType buffer. Most Windows
-        // UI fonts are individual TTF/OTF files. For TTC collections, face_index
-        // may be non-zero and ab_glyph can reject the buffer; callers then fall
-        // back to Segoe UI/Arial.
         let _ = face_index;
         data.to_vec()
     })
