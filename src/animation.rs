@@ -76,12 +76,12 @@ fn shape_progress_by_speed(progress: f32, speed: f32) -> f32 {
         DEFAULT_REVEAL_SPEED
     };
 
-    // Preserve the existing 40-speed timing exactly while making the per-layer
-    // Reveal Speed control materially affect the animation. Faster values move
-    // more of the reveal earlier in the layer's timeline slot; slower values
-    // defer more work until later. Endpoints remain exact so every layer is
-    // guaranteed to be complete at the end of its slot and export timeline.
-    let exponent = (DEFAULT_REVEAL_SPEED / speed).clamp(0.4, 4.0);
+    // Preserve the existing 40-speed timing exactly while making every value
+    // in the supported 1..=100 range distinct. The square-root ratio avoids
+    // collapsing low speeds into one bucket and prevents extreme values from
+    // becoming effectively frozen until the final frame. Endpoints remain
+    // exact so every layer is complete when its timeline slot reaches 100%.
+    let exponent = (DEFAULT_REVEAL_SPEED / speed).sqrt();
     progress.powf(exponent).clamp(0.0, 1.0)
 }
 
@@ -360,24 +360,26 @@ mod tests {
     }
 
     #[test]
-    fn reveal_speed_changes_progress_without_breaking_endpoints() {
+    fn reveal_speed_uses_the_full_supported_range_monotonically() {
         let mut project = Project::default();
-        let mut slow = Layer::new_text(project.canvas.width, project.canvas.height);
-        let mut normal = Layer::new_text(project.canvas.width, project.canvas.height);
-        let mut fast = Layer::new_text(project.canvas.width, project.canvas.height);
-        slow.anim_order = Some(1);
-        normal.anim_order = Some(1);
-        fast.anim_order = Some(1);
-        slow.animation.speed = 10.0;
-        normal.animation.speed = DEFAULT_REVEAL_SPEED;
-        fast.animation.speed = 100.0;
-        project.layers = vec![slow, normal, fast];
+        let speeds = [1.0_f32, 10.0, 20.0, 40.0, 60.0, 80.0, 100.0];
+        project.layers = speeds
+            .iter()
+            .map(|speed| {
+                let mut layer = Layer::new_text(project.canvas.width, project.canvas.height);
+                layer.anim_order = Some(1);
+                layer.animation.speed = *speed;
+                layer
+            })
+            .collect();
 
-        let slow_mid = layer_progress(&project, 0, 0.5);
-        let normal_mid = layer_progress(&project, 1, 0.5);
-        let fast_mid = layer_progress(&project, 2, 0.5);
-        assert!(slow_mid < normal_mid);
-        assert!(normal_mid < fast_mid);
+        let progresses: Vec<f32> = (0..project.layers.len())
+            .map(|index| layer_progress(&project, index, 0.5))
+            .collect();
+        for pair in progresses.windows(2) {
+            assert!(pair[0] < pair[1]);
+        }
+        assert!((progresses[3] - 0.5).abs() < f32::EPSILON);
 
         for index in 0..project.layers.len() {
             assert_eq!(layer_progress(&project, index, 0.0), 0.0);
