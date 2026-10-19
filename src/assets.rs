@@ -96,6 +96,9 @@ impl RuntimeAssets {
     }
 
     pub fn load_image(&mut self, ctx: &egui::Context, layer_id: &str, path: &Path) -> Result<(u32, u32)> {
+        if self.hands.is_empty() {
+            let _ = self.load_builtin_hands(ctx);
+        }
         let decoded = image::ImageReader::open(path)
             .with_context(|| format!("Cannot open {}", path.display()))?
             .decode()
