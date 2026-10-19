@@ -6,6 +6,7 @@ mod export;
 mod export_worker;
 mod font_catalog;
 mod model;
+mod native_mp4;
 mod project_io;
 mod render;
 mod slicer;
