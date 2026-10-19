@@ -8,7 +8,7 @@ use crate::model::{LayerContent, Project};
 pub fn resolved_export_dimensions(project: &Project) -> (u32, u32) {
     let canvas_w = project.canvas.width.max(1) as f64;
     let canvas_h = project.canvas.height.max(1) as f64;
-    let base = project.export.width.min(project.export.height).max(1) as f64;
+    let base = project.export.width.min(project.export.height).max(320) as f64;
     let aspect = canvas_w / canvas_h;
 
     let (width, height) = if (aspect - 1.0).abs() < 0.000_001 {
@@ -146,5 +146,17 @@ mod tests {
         let (width, height) = resolved_export_dimensions(&project);
         assert_eq!((width, height), (1350, 1080));
         assert!((width as f64 / height as f64 - 1.25).abs() < 0.001);
+    }
+
+    #[test]
+    fn tiny_legacy_export_size_is_raised_without_changing_aspect() {
+        let mut project = Project::default();
+        project.canvas.width = 720;
+        project.canvas.height = 1280;
+        project.export.width = 100;
+        project.export.height = 100;
+        let (width, height) = resolved_export_dimensions(&project);
+        assert_eq!((width, height), (320, 569));
+        assert!((width as f64 / height as f64 - 0.5625).abs() < 0.001);
     }
 }
