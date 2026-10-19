@@ -17,6 +17,7 @@ mod native_webm;
 mod project_io;
 mod render;
 mod slicer;
+mod timing;
 
 #[cfg(test)]
 mod regression_tests;
