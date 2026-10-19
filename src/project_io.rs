@@ -63,10 +63,15 @@ fn should_copy_asset(source: &Path, target: &Path) -> Result<bool> {
         return Ok(true);
     }
 
-    match (source_meta.modified(), target_meta.modified()) {
-        (Ok(source_modified), Ok(target_modified)) => Ok(source_modified > target_modified),
-        _ => Ok(true),
-    }
+    // Equal size and timestamps are not sufficient to prove that an existing
+    // staged asset is still the same image. Editors and sync tools can replace
+    // a file while preserving both. Compare the bytes before reusing the staged
+    // copy so Save/Autosave never silently points at stale image content.
+    let source_bytes = fs::read(source)
+        .with_context(|| format!("Read source asset {}", source.display()))?;
+    let target_bytes = fs::read(target)
+        .with_context(|| format!("Read staged asset {}", target.display()))?;
+    Ok(source_bytes != target_bytes)
 }
 
 fn assets_dir_for_path(path: &Path) -> (String, PathBuf) {
@@ -300,6 +305,25 @@ mod tests {
         };
         assert!(path.exists(), "staged asset must survive source removal");
         assert!(path.starts_with(&root));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn same_size_changed_asset_is_replaced() {
+        let root = std::env::temp_dir().join(format!(
+            "inkplainer-staged-asset-compare-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).expect("create staged asset compare directory");
+        let source = root.join("source.bin");
+        let target = root.join("target.bin");
+        fs::write(&source, b"AAAA").expect("write source bytes");
+        fs::write(&target, b"BBBB").expect("write target bytes");
+
+        assert!(should_copy_asset(&source, &target).expect("compare changed assets"));
+        fs::write(&target, b"AAAA").expect("make target identical");
+        assert!(!should_copy_asset(&source, &target).expect("compare identical assets"));
 
         let _ = fs::remove_dir_all(root);
     }
