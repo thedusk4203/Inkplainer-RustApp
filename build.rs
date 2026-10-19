@@ -37,13 +37,18 @@ fn stage(out_dir: &Path, local_name: &str, upstream_path: &str) {
         "https://raw.githubusercontent.com/NadirWeb-App/Inkplainer-OS/{UPSTREAM_COMMIT}/{upstream_path}"
     );
 
-    if download_with_powershell(&url, &destination) {
+    if download_with_powershell(&url, &destination)
+        && destination.metadata().map(|m| m.len() > 64).unwrap_or(false)
+    {
         return;
     }
 
-    // Keep source builds working without network access. CI/release builds have
-    // network access and therefore embed the exact pinned upstream sprites.
-    // This is a valid 1x1 transparent PNG used only as an offline build fallback.
+    if env::var_os("CI").is_some() {
+        panic!("Required upstream hand sprite could not be downloaded: {url}");
+    }
+
+    // Keep local source builds usable without network access. Official CI/release
+    // builds intentionally fail above instead of shipping a missing hand sprite.
     const TRANSPARENT_PNG: &[u8] = &[
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
         0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
