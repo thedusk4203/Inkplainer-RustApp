@@ -20,6 +20,8 @@ thiserror = "2"
 imageproc = "0.27"
 ab_glyph = "0.2"
 fontdb = "0.24"
+rusty_h264 = "0.16.1"
+mp4io = "0.1.2"
 
 [profile.release]
 lto = "thin"
