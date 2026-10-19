@@ -19,6 +19,7 @@ anyhow = "1"
 thiserror = "2"
 imageproc = "0.27"
 ab_glyph = "0.2"
+fontdb = "0.24"
 
 [profile.release]
 lto = "thin"
