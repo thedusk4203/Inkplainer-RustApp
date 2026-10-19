@@ -75,7 +75,9 @@ fn reveal_speed_changes_actual_rendered_progress() {
 }
 
 fn avc1_dimensions(bytes: &[u8]) -> Option<(u16, u16)> {
-    let type_pos = bytes.windows(4).position(|window| window == b"avc1")?;
+    // `avc1` can also appear in ftyp compatible brands. The visual sample entry
+    // lives later in the moov hierarchy, so use the last occurrence in the file.
+    let type_pos = bytes.windows(4).rposition(|window| window == b"avc1")?;
     let entry_start = type_pos.checked_sub(4)?;
     let width_start = entry_start.checked_add(32)?;
     let height_start = entry_start.checked_add(34)?;
