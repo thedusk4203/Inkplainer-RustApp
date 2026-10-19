@@ -18,6 +18,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+      - name: Generate dependency lockfile
+        run: cargo generate-lockfile
+      - name: Upload generated lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkplainer-cargo-lock
+          path: Cargo.lock
       - name: Check
         env:
           RUSTFLAGS: -D warnings
