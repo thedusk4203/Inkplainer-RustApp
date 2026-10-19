@@ -9,7 +9,19 @@ Inkplainer-RustApp is a native Rust reimplementation/derivative of:
 - Upstream copyright: Copyright 2026 Nadir
 
 The Rust port preserves the upstream product model (layers, per-layer animation settings,
-animation ordering/groups, whiteboard reveal styles, local-first project workflow) while
-replacing the browser/Canvas/WebCodecs implementation with a native desktop architecture.
+animation ordering/groups, whiteboard reveal styles, local-first project workflow) while replacing
+the browser/Canvas/WebCodecs implementation with a native desktop architecture.
 
-Files in this repository are new Rust implementations unless explicitly stated otherwise.
+## Upstream assets reused verbatim
+
+The built-in Hand 1, Hand 2, Hand 3, Pen, Cartoon and Pixel Art PNG sprite families are copied from
+the pinned upstream commit above. This includes the 720p, 1080p and 1440p landscape/portrait files
+under upstream `images/hand*.png`. Their upstream `tipX`/`tipY` placement metadata is also preserved.
+
+`build.rs` stages those exact pinned assets into Cargo's build output and `src/hand_assets.rs` embeds
+them in the native executable. GitHub Actions/release builds fail if a required upstream sprite
+cannot be retrieved, preventing release artifacts from silently substituting a fallback image.
+
+All Rust source implementations in this repository are new native implementations unless a file or
+section explicitly states otherwise. The reused upstream hand assets remain covered by the upstream
+Apache-2.0 license and attribution.
