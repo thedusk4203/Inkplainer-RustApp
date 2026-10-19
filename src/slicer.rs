@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use crate::assets::RuntimeImage;
 use crate::model::{Layer, LayerContent};
+use crate::project_io;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NormalizedRect {
@@ -95,8 +96,9 @@ pub fn freehand_slice(layer: &Layer, runtime: &RuntimeImage, polygon: &[[f32; 2]
 }
 
 fn slice_root(layer: &Layer) -> Result<PathBuf> {
-    let root = std::env::temp_dir().join("inkplainer-rustapp-slices").join(&layer.id);
-    std::fs::create_dir_all(&root).with_context(|| format!("Create slicer directory {}", root.display()))?;
+    let root = project_io::slice_cache_dir().join(&layer.id);
+    std::fs::create_dir_all(&root)
+        .with_context(|| format!("Create slicer directory {}", root.display()))?;
     Ok(root)
 }
 
@@ -142,5 +144,15 @@ mod tests {
         assert!(point_in_polygon([0.5,0.5], &counter_clockwise));
         assert!(!point_in_polygon([1.5,0.5], &clockwise));
         assert!(!point_in_polygon([-0.1,0.5], &counter_clockwise));
+    }
+
+    #[test]
+    fn slice_root_is_under_persistent_app_cache() {
+        let mut layer = Layer::new_text(1280, 720);
+        layer.id = "slice-cache-test".to_owned();
+        let root = slice_root(&layer).expect("slice cache directory");
+        assert!(root.starts_with(project_io::slice_cache_dir()));
+        assert!(root.ends_with("slice-cache-test"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }
