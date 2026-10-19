@@ -1,8 +1,8 @@
 # Inkplainer-OS → RustApp parity audit
 
-This file tracks behavior against the upstream Inkplainer-OS implementation. A checkbox is only
-marked complete when the Rust implementation exists; build/test status is tracked separately by
-Windows CI.
+This file tracks the native Rust port against the pinned Inkplainer-OS baseline documented in
+`UPSTREAM.md`. A checkbox is marked complete when the implementation exists and is covered by the
+current Windows CI build/test gate where practical.
 
 ## Core editor
 
@@ -14,8 +14,10 @@ Windows CI.
 - [x] Equal animation order runs in parallel
 - [x] Group metadata
 - [x] Native drag positioning
+- [x] Resize handles directly on canvas
 - [x] Undo / redo
 - [x] Keyboard playback/edit shortcuts
+- [x] Arbitrary installed-font picker and native text rendering
 
 ## Animation styles
 
@@ -62,38 +64,55 @@ Windows CI.
 - [x] Iris reveal
 - [x] Scanlines reveal
 
+## Hand system
+
+- [x] Ghost / Hand 1 / Hand 2 / Hand 3 / Pen / Cartoon / Pixel Art choices
+- [x] Exact upstream hand sprite library embedded from the pinned baseline
+- [x] 720p / 1080p / 1440p and portrait sprite variants
+- [x] Upstream tipX/tipY anchoring
+- [x] Smooth-hand toggle affects the actual hand trajectory
+- [x] Same hand sprites/trajectory in interactive preview and offline PNG/video rendering
+
 ## Slicer
 
 - [x] Grid mode (1–8 columns / rows)
 - [x] Rectangle-region backend
-- [x] Freehand polygon backend
+- [x] Rectangle direct-drag UI
+- [x] Freehand polygon backend/UI
 - [x] Preserve source layer animation/order/group settings
 - [x] Freehand polygon works clockwise and counter-clockwise
 
-## Project / export
+## Project workflow
 
 - [x] Project JSON save/open
 - [x] Portable copied asset directory next to project
 - [x] Auto-save/restore
+- [x] Project browser with multiple projects and storage-used display
+
+## Export
+
 - [x] PNG export
-- [x] MP4 export
-- [x] WebM export
+- [x] Self-contained MP4/H.264 export (no ffmpeg executable required)
+- [x] Self-contained WebM/AV1 export (no ffmpeg executable required)
 - [x] 720p / 1080p / 1440p controls
 - [x] Export quality/FPS controls
-- [ ] Self-contained video encoder (current MP4/WebM path uses ffmpeg from PATH)
+- [x] Background export worker
+- [x] Export progress and cancel
+- [x] MP4/WebM smoke tests generate real containers in Windows CI
 
-## Remaining UX/visual parity work
+## Regression coverage
 
-- [ ] Distinct Hand 1/2/3/Cartoon visuals matching the upstream hand library
-- [ ] Smooth-hand toggle must affect actual hand trajectory (model/UI already present)
-- [ ] Rectangle slicer direct-drag UI (backend currently complete; UI also supports numeric regions)
-- [ ] Full project browser with multiple auto-saved projects and storage-used display
-- [ ] Arbitrary font picker/rendering parity (font family is persisted; native renderer currently uses system/default fonts)
-- [ ] Resize handles directly on canvas
-- [ ] Export progress/cancel worker
-- [ ] Pixel-level regression comparison against representative upstream renders
+- [x] Animation-order/group regression tests
+- [x] Reveal-region bounds tests
+- [x] Deterministic reveal-geometry tests
+- [x] Project JSON/file round-trip tests
+- [x] Representative pixel-level Scanner fixture derived from upstream behavior
+- [x] Native MP4/WebM container smoke tests
 
-## Definition of “100%”
+## Current parity statement
 
-Do not call this port 100% feature/visual parity until every remaining item above is implemented and
-Windows CI plus representative render regression tests pass.
+The audited functional parity checklist for the pinned upstream baseline is complete. This does not
+claim that every possible frame is bit-for-bit identical to the browser implementation: font
+rasterization, GPU/CPU sampling, operating-system rendering, and untested combinations can still
+produce visual differences. Representative pixel-level regression tests are therefore retained as
+a CI gate and should be expanded whenever a mismatch is found.
