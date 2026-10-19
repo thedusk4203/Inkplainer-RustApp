@@ -56,11 +56,11 @@ impl NativeUiApp {
         }
     }
 
-    fn prune_failed_new_image_layers(&mut self, before_ids: &HashSet<String>) {
+    fn prune_failed_new_image_layers(&mut self, before_ids: &HashSet<String>) -> usize {
         if self.inner.status.starts_with("Opened ")
             || self.inner.status.starts_with("Autosave restored")
         {
-            return;
+            return 0;
         }
 
         let images = &self.inner.assets.images;
@@ -76,7 +76,7 @@ impl NativeUiApp {
         });
         let removed = before_len.saturating_sub(self.inner.project.layers.len());
         if removed == 0 {
-            return;
+            return 0;
         }
 
         if self
@@ -90,6 +90,20 @@ impl NativeUiApp {
             "{} | {removed} failed image layer(s) were not added",
             self.inner.status
         );
+        removed
+    }
+
+    fn repair_autosave_after_failed_import(&mut self, removed: usize) {
+        if removed == 0 || !self.inner.project.autosave_enabled {
+            return;
+        }
+
+        if let Err(err) = project_io::save_autosave(&self.inner.project) {
+            self.inner.status = format!(
+                "{} | clean autosave after rollback failed: {err:#}",
+                self.inner.status
+            );
+        }
     }
 }
 
@@ -108,7 +122,8 @@ impl eframe::App for NativeUiApp {
             &mut self.left_tab,
             &mut self.input_mode,
         );
-        self.prune_failed_new_image_layers(&before_ids);
+        let removed = self.prune_failed_new_image_layers(&before_ids);
+        self.repair_autosave_after_failed_import(removed);
         self.normalize_export_dimensions();
     }
 }
