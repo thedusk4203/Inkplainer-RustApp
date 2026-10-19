@@ -1,6 +1,7 @@
 name: Apply upstream-style native UI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
