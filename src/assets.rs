@@ -4,12 +4,13 @@ use image::RgbaImage;
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::effects::{build_edge_paths, EdgePaths};
 use crate::model::{LayerContent, Project};
 
 pub struct RuntimeImage {
     pub texture: TextureHandle,
     pub rgba: RgbaImage,
-    pub edge_path: Vec<[f32; 2]>,
+    pub edges: EdgePaths,
 }
 
 #[derive(Default)]
@@ -49,59 +50,15 @@ impl RuntimeAssets {
             color,
             TextureOptions::LINEAR,
         );
-        let edge_path = extract_edge_path(&decoded);
+        let edges = build_edge_paths(&decoded);
         self.images.insert(
             layer_id.to_owned(),
             RuntimeImage {
                 texture,
                 rgba: decoded,
-                edge_path,
+                edges,
             },
         );
         Ok((w, h))
-    }
-}
-
-fn extract_edge_path(img: &RgbaImage) -> Vec<[f32; 2]> {
-    let (w, h) = img.dimensions();
-    if w == 0 || h == 0 {
-        return Vec::new();
-    }
-    let present = |x: u32, y: u32| {
-        let p = img.get_pixel(x, y).0;
-        p[3] > 20 && (p[3] < 250 || p[0] < 240 || p[1] < 240 || p[2] < 240)
-    };
-
-    let mut pts = Vec::new();
-    for x in 0..w {
-        for y in 0..h {
-            if present(x, y) {
-                pts.push([x as f32 / w as f32, y as f32 / h as f32]);
-                break;
-            }
-        }
-    }
-    for x in (0..w).rev() {
-        for y in (0..h).rev() {
-            if present(x, y) {
-                pts.push([x as f32 / w as f32, y as f32 / h as f32]);
-                break;
-            }
-        }
-    }
-    for y in (0..h).rev() {
-        for x in 0..w {
-            if present(x, y) {
-                pts.push([x as f32 / w as f32, y as f32 / h as f32]);
-                break;
-            }
-        }
-    }
-
-    if pts.len() > 2500 {
-        let stride = (pts.len() as f32 / 2500.0).ceil() as usize;
-        pts.into_iter().step_by(stride).collect()
-    } else {
-        pts
     }
 }
