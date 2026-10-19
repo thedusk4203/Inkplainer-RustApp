@@ -2,8 +2,10 @@
 
 ## Objective
 
-Reimplement Inkplainer as a Windows-native Rust application while preserving the upstream
-workflow and output semantics. No HTML/JS/WebView layer should remain in the production app.
+Reimplement Inkplainer as a Windows-native Rust application while preserving the pinned upstream
+workflow and output semantics. No HTML/JS/WebView layer remains in the production runtime.
+
+For the audited baseline and current limitations, see `PARITY_STATUS.md`.
 
 ## Architecture mapping
 
@@ -13,52 +15,55 @@ workflow and output semantics. No HTML/JS/WebView layer should remain in the pro
 | `<canvas>` 2D rendering | `egui` GPU painting for preview + `image` CPU renderer for export |
 | `Image` / browser decoders | `image` crate |
 | `requestAnimationFrame` | native frame loop in `eframe::App::update` |
-| IndexedDB/local browser storage | native project files + later app-data project index |
-| WebCodecs / mp4-muxer | current ffmpeg bridge; later native bundled encoder |
+| IndexedDB/local browser storage | native project files, autosave and project library |
+| WebCodecs / mp4-muxer | self-contained Rust H.264/MP4 + AV1/WebM pipelines |
 | Browser file picker | `rfd` native Windows dialogs |
 | JS global `state` | strongly typed Rust `Project`, `Layer`, `AnimationSettings` |
 | animation slots/groups | deterministic per-layer group scheduler |
+| browser hand PNGs | exact pinned upstream sprites embedded in the native executable |
 
 ## Milestones
 
-### M1 — Native editor foundation (implemented in this scaffold)
+### M1 — Native editor foundation — complete
 - Native executable
 - Image/text layers
 - Layer stack, transforms, opacity, visibility
 - Animation order and parallel groups
 - Core reveal algorithms
 - Project save/load
-- PNG/MP4 export
+- PNG export
 
-### M2 — Drawing parity
-- Port Classic / Adaptive / Morph Shell / Canny+ edge algorithms
-- Port internal ink extraction
-- Stroke engines: Default, Charcoal, Sketch, Fountain, Blueprint
-- Full Outline Fill / Illust Fill / Outline Only behavior
-- Coloring styles: Sparse, Filled, Watercolor
-- Reveal transitions: Fade, Dissolve, Wipe, Iris, Scanlines
+### M2 — Drawing parity — complete for audited baseline
+- Classic / Adaptive / Morph Shell / Canny+ edge algorithms
+- Internal edge/ink processing
+- Default, Charcoal, Sketch, Fountain and Blueprint strokes
+- Outline Fill / Illust Fill / Outline Only behavior
+- Sparse, Filled and Watercolor coloring
+- Fade, Dissolve, Wipe, Iris and Scanlines reveal transitions
 
-### M3 — Editor parity
-- Canvas hit-testing + selection handles
-- Aspect-preserving resize handles
-- Undo/redo command stack
-- Multi-select
-- Grid / rectangle / freehand slicer
-- Preset manager
-- Custom backgrounds/textures
-- Hand image library and smooth glide
+### M3 — Editor parity — complete for audited baseline
+- Canvas hit-testing and native selection
+- Direct resize handles
+- Undo/redo history
+- Grid / rectangle-drag / freehand slicer
+- Presets/settings workflow
+- Background styles/textures
+- Installed-font selection/rendering
+- Pinned upstream hand image library and smooth glide
 
-### M4 — Project/media parity
-- Portable `.inkplainer` package with embedded assets
-- Auto-save and project browser
-- WebM support
-- Self-contained video encoding (no system ffmpeg requirement)
-- Export progress/cancel worker
-- Audio/voice timeline hooks for the larger whiteboard-maker product
+### M4 — Project/media parity — complete for audited baseline
+- Portable copied project assets
+- Auto-save/restore and project browser
+- Self-contained MP4/H.264 export
+- Self-contained WebM/AV1 export
+- Background export worker with progress/cancel
+- Native codec smoke tests in Windows CI
+- Representative pixel-level render regression gate
 
-### M5 — Performance
-- Rayon/worker-thread preprocessing for edge maps
-- GPU-assisted image masks where beneficial
-- Cached resized textures and edge data
-- Incremental export renderer
-- Benchmark against upstream at 720p/1080p/1440p
+### M5 — Performance and hardening — ongoing
+- Expand representative upstream pixel fixtures across more animation/effect combinations
+- Profile edge extraction and CPU frame compositing
+- Add worker-thread/Rayon preprocessing where measurements justify it
+- Cache expensive resize/edge intermediates where memory trade-offs are acceptable
+- Benchmark native preview/export at 720p/1080p/1440p against the pinned upstream baseline
+- Continue adding regressions for every discovered visual or behavioral mismatch
