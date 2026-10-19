@@ -29,34 +29,28 @@ struct NativeUiApp {
     inner: InkplainerApp,
     left_tab: app::native_ui::LeftPanelTab,
     input_mode: app::native_ui::InputMode,
-    last_canvas_size: (u32, u32),
 }
 
 impl NativeUiApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         app::native_ui::configure(&cc.egui_ctx);
-        let inner = InkplainerApp::new(cc);
-        let last_canvas_size = (inner.project.canvas.width, inner.project.canvas.height);
         Self {
-            inner,
+            inner: InkplainerApp::new(cc),
             left_tab: app::native_ui::LeftPanelTab::default(),
             input_mode: app::native_ui::InputMode::default(),
-            last_canvas_size,
         }
     }
 
-    fn sync_export_to_canvas_aspect(&mut self) {
-        let canvas_size = (
-            self.inner.project.canvas.width,
-            self.inner.project.canvas.height,
+    fn normalize_export_dimensions(&mut self) {
+        let resolved = export_scale::resolved_export_dimensions(&self.inner.project);
+        let current = (
+            self.inner.project.export.width,
+            self.inner.project.export.height,
         );
-        if canvas_size == self.last_canvas_size {
-            return;
+        if current != resolved {
+            self.inner.project.export.width = resolved.0;
+            self.inner.project.export.height = resolved.1;
         }
-        let (width, height) = export_scale::resolved_export_dimensions(&self.inner.project);
-        self.inner.project.export.width = width;
-        self.inner.project.export.height = height;
-        self.last_canvas_size = canvas_size;
     }
 }
 
@@ -68,7 +62,7 @@ impl eframe::App for NativeUiApp {
             &mut self.left_tab,
             &mut self.input_mode,
         );
-        self.sync_export_to_canvas_aspect();
+        self.normalize_export_dimensions();
     }
 }
 
