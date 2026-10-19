@@ -1,0 +1,1 @@
+Copyright 2026 Nadir. Licensed under the Apache License 2.0 as part of the pinned Inkplainer-OS upstream source.
