@@ -1,10 +1,12 @@
 #![cfg(test)]
 
 use std::fs;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 
 use crate::animation::{layer_progress, reveal_regions};
-use crate::model::{AnimationStyle, Layer, Project};
-use crate::project_io;
+use crate::assets::RuntimeAssets;
+use crate::model::{AnimationStyle, ExportQuality, Layer, Project};
+use crate::{native_mp4, native_webm, project_io};
 
 #[test]
 fn ordered_layers_share_groups_and_unordered_layers_follow() {
@@ -31,7 +33,7 @@ fn ordered_layers_share_groups_and_unordered_layers_follow() {
 
 #[test]
 fn every_reveal_style_stays_inside_normalized_canvas() {
-    let mut project = Project::default();
+    let project = Project::default();
     let mut layer = Layer::new_text(project.canvas.width, project.canvas.height);
     layer.id = "regression-seed".to_owned();
 
@@ -137,5 +139,44 @@ fn project_file_roundtrip_works_without_assets() {
     let restored = project_io::load_project(&path).expect("load project");
     assert_eq!(restored.name, project.name);
     assert_eq!(restored.layers.len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn native_video_encoders_emit_real_mp4_and_webm_containers() {
+    let mut project = Project::default();
+    project.canvas.width = 320;
+    project.canvas.height = 240;
+    project.duration_seconds = 0.5;
+    project.export.width = 320;
+    project.export.height = 240;
+    project.export.fps = 12;
+    project.export.quality = ExportQuality::Low;
+    project.layers.clear();
+
+    let assets = RuntimeAssets::default();
+    let root = std::env::temp_dir().join(format!("inkplainer-codec-test-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&root).expect("create codec test dir");
+    let mp4_path = root.join("smoke.mp4");
+    let webm_path = root.join("smoke.webm");
+
+    let mp4_progress = AtomicU32::new(0);
+    let mp4_cancel = AtomicBool::new(false);
+    native_mp4::export_mp4(&project, &assets, &mp4_path, &mp4_progress, &mp4_cancel)
+        .expect("pure Rust MP4 export");
+    let mp4 = fs::read(&mp4_path).expect("read MP4");
+    assert!(mp4.len() > 64, "MP4 output unexpectedly small");
+    assert_eq!(&mp4[4..8], b"ftyp", "MP4 must start with an ftyp box");
+    assert_eq!(mp4_progress.load(std::sync::atomic::Ordering::Relaxed), 1000);
+
+    let webm_progress = AtomicU32::new(0);
+    let webm_cancel = AtomicBool::new(false);
+    native_webm::export_webm(&project, &assets, &webm_path, &webm_progress, &webm_cancel)
+        .expect("pure Rust WebM export");
+    let webm = fs::read(&webm_path).expect("read WebM");
+    assert!(webm.len() > 64, "WebM output unexpectedly small");
+    assert_eq!(&webm[..4], &[0x1a, 0x45, 0xdf, 0xa3], "WebM must start with the EBML header");
+    assert_eq!(webm_progress.load(std::sync::atomic::Ordering::Relaxed), 1000);
+
     let _ = fs::remove_dir_all(root);
 }
