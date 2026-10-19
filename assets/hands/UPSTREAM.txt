@@ -1,0 +1,4 @@
+These image assets are copied from NadirWeb-App/Inkplainer-OS.
+Upstream: https://github.com/NadirWeb-App/Inkplainer-OS
+License: Apache License 2.0 (see repository LICENSE and UPSTREAM.md).
+Files are embedded in the native Rust binary at compile time.
