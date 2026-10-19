@@ -6,6 +6,7 @@ mod export;
 mod model;
 mod project_io;
 mod render;
+mod slicer;
 
 use app::InkplainerApp;
 use eframe::egui;
