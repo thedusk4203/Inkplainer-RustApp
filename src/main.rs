@@ -4,6 +4,7 @@ mod assets;
 mod effects;
 mod export;
 mod export_worker;
+mod font_catalog;
 mod model;
 mod project_io;
 mod render;
