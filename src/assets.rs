@@ -7,13 +7,14 @@ use std::path::Path;
 use crate::effects::{build_edge_paths, EdgePaths};
 use crate::model::{LayerContent, Project};
 
+#[derive(Clone)]
 pub struct RuntimeImage {
     pub texture: TextureHandle,
     pub rgba: RgbaImage,
     pub edges: EdgePaths,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct RuntimeAssets {
     pub images: HashMap<String, RuntimeImage>,
 }
