@@ -28,7 +28,15 @@ pub fn render_frame(project: &Project, assets: &RuntimeAssets, global_progress: 
         match &layer.content {
             LayerContent::Image { .. } => {
                 if let Some(runtime) = assets.images.get(&layer.id) {
-                    render_image_layer(&mut canvas, runtime, layer, progress, project.hand_glide_enabled);
+                    render_image_layer(
+                        &mut canvas,
+                        runtime,
+                        layer,
+                        progress,
+                        project.hand_glide_enabled,
+                        assets,
+                        project,
+                    );
                 }
             }
             LayerContent::Text(text) => render_text_layer(&mut canvas, layer, text, progress),
@@ -133,6 +141,8 @@ fn render_image_layer(
     layer: &Layer,
     progress: f32,
     smooth_hand: bool,
+    assets: &RuntimeAssets,
+    project: &Project,
 ) {
     let w = layer.transform.w.round().max(1.0) as u32;
     let h = layer.transform.h.round().max(1.0) as u32;
@@ -169,7 +179,7 @@ fn render_image_layer(
         }
         _ => blend_regions(canvas, &resized, x, y, &reveal_regions(layer, progress), layer.opacity),
     }
-    draw_hand(canvas, runtime, layer, progress, smooth_hand);
+    draw_hand(canvas, runtime, layer, progress, smooth_hand, assets, project);
 }
 
 fn render_outline_fill(
@@ -376,6 +386,8 @@ fn draw_hand(
     layer: &Layer,
     progress: f32,
     smooth_hand: bool,
+    assets: &RuntimeAssets,
+    project: &Project,
 ) {
     if layer.animation.hand == HandStyle::Ghost || progress <= 0.0 || progress >= 1.0 { return; }
     let (tx, ty) = if smooth_hand {
@@ -383,6 +395,24 @@ fn draw_hand(
     } else {
         hand_tip(runtime, layer, progress)
     };
+
+    if let Some(hand) = assets.hand(layer.animation.hand, project.canvas.width, project.canvas.height) {
+        if hand.rgba.width() > 1 || hand.rgba.height() > 1 {
+            let ox = tx.round() as i32 - hand.tip_x as i32;
+            let oy = ty.round() as i32 - hand.tip_y as i32;
+            for sy in 0..hand.rgba.height() {
+                for sx in 0..hand.rgba.width() {
+                    let px = *hand.rgba.get_pixel(sx, sy);
+                    if px.0[3] == 0 { continue; }
+                    blend_one(canvas, px, ox + sx as i32, oy + sy as i32, 1.0);
+                }
+            }
+            return;
+        }
+    }
+
+    // Procedural fallback is retained only for local/offline builds where the
+    // exact pinned upstream sprite library could not be staged by build.rs.
     let s = (layer.transform.w.min(layer.transform.h) * 0.045).clamp(8.0, 42.0);
     let dark = Rgba([45, 45, 50, 250]);
     match layer.animation.hand {
