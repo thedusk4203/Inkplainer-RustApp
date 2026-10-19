@@ -9,6 +9,7 @@ use std::process::Command;
 use crate::animation::{layer_progress, reveal_regions, RevealRegion};
 use crate::assets::{RuntimeAssets, RuntimeImage};
 use crate::effects::select_edge_path;
+use crate::hand::hand_tip_normalized;
 use crate::model::{
     AnimationStyle, Background, ColoringStyle, ExportQuality, HandStyle, Layer, LayerContent,
     Project, RevealStyle, StrokeStyle, TextAlign, TextDirection, TextDrawStyle,
@@ -90,7 +91,7 @@ pub fn render_frame(project: &Project, assets: &RuntimeAssets, global_progress: 
 }
 
 fn render_text_layer(canvas: &mut RgbaImage, layer: &Layer, text: &crate::model::TextLayer, progress: f32) {
-    let Some(font) = load_windows_font(text.bold, text.italic) else { return; };
+    let Some(font) = load_windows_font(&text.font_family, text.bold, text.italic) else { return; };
     let w = layer.transform.w.round().max(1.0) as u32;
     let h = layer.transform.h.round().max(1.0) as u32;
     let mut local = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 0]));
@@ -168,7 +169,7 @@ fn mask_text_direction(img: &mut RgbaImage, progress: f32, direction: TextDirect
     }
 }
 
-fn render_image_layer(canvas: &mut RgbaImage, runtime: &RuntimeImage, layer: &Layer, progress: f32, _smooth_hand: bool) {
+fn render_image_layer(canvas: &mut RgbaImage, runtime: &RuntimeImage, layer: &Layer, progress: f32, smooth_hand: bool) {
     let w = layer.transform.w.round().max(1.0) as u32;
     let h = layer.transform.h.round().max(1.0) as u32;
     let resized = image::imageops::resize(&runtime.rgba, w, h, FilterType::Lanczos3);
@@ -186,18 +187,14 @@ fn render_image_layer(canvas: &mut RgbaImage, runtime: &RuntimeImage, layer: &La
                 blend_regions(canvas, &resized, x, y, &reveal_regions(&scanner, (progress - 0.35) / 0.65), layer.opacity);
             }
         }
-        AnimationStyle::OutlineFill => {
-            render_outline_fill(canvas, &resized, runtime, layer, progress, false);
-        }
-        AnimationStyle::IllustFill => {
-            render_outline_fill(canvas, &resized, runtime, layer, progress, true);
-        }
+        AnimationStyle::OutlineFill => render_outline_fill(canvas, &resized, runtime, layer, progress, false),
+        AnimationStyle::IllustFill => render_outline_fill(canvas, &resized, runtime, layer, progress, true),
         AnimationStyle::OutlineOnly => {
             if layer.animation.outline_visible { draw_edge(canvas, runtime, layer, progress); }
         }
         _ => blend_regions(canvas, &resized, x, y, &reveal_regions(layer, progress), layer.opacity),
     }
-    draw_hand(canvas, runtime, layer, progress);
+    draw_hand(canvas, runtime, layer, progress, smooth_hand);
 }
 
 fn render_outline_fill(canvas: &mut RgbaImage, resized: &RgbaImage, runtime: &RuntimeImage, layer: &Layer, progress: f32, illustrated: bool) {
@@ -286,7 +283,9 @@ fn draw_edge(canvas: &mut RgbaImage, runtime: &RuntimeImage, layer: &Layer, prog
         if (dx * dx + dy * dy).sqrt() > max_jump { continue; }
         match layer.animation.stroke_style {
             StrokeStyle::Sketch => {
-                for off in [-1.5f32, -0.5, 0.5, 1.5] { draw_line_segment_mut(canvas, (a.0 + off, a.1 - off * 0.4), (b.0 + off, b.1 - off * 0.4), Rgba([c[0], c[1], c[2], c[3] / 2])); }
+                for off in [-1.5f32, -0.5, 0.5, 1.5] {
+                    draw_line_segment_mut(canvas, (a.0 + off, a.1 - off * 0.4), (b.0 + off, b.1 - off * 0.4), Rgba([c[0], c[1], c[2], c[3] / 2]));
+                }
             }
             StrokeStyle::Charcoal => draw_thick_line(canvas, a, b, Rgba([c[0], c[1], c[2], c[3] / 2]), thickness * 2),
             StrokeStyle::Fountain => draw_thick_line(canvas, a, b, color, ((thickness as f32) * (0.7 + (i as f32 * 0.17).sin().abs())).round() as i32),
@@ -303,40 +302,50 @@ fn draw_thick_line(img: &mut RgbaImage, a: (f32, f32), b: (f32, f32), color: Rgb
     }
 }
 
-fn draw_hand(canvas: &mut RgbaImage, runtime: &RuntimeImage, layer: &Layer, progress: f32) {
+fn draw_hand(canvas: &mut RgbaImage, runtime: &RuntimeImage, layer: &Layer, progress: f32, smooth: bool) {
     if layer.animation.hand == HandStyle::Ghost || progress <= 0.0 || progress >= 1.0 { return; }
-    let (tx, ty) = hand_tip(runtime, layer, progress);
+    let uv = hand_tip_normalized(runtime, layer, progress, smooth);
+    let tx = layer.transform.x + uv[0] * layer.transform.w;
+    let ty = layer.transform.y + uv[1] * layer.transform.h;
     let s = (layer.transform.w.min(layer.transform.h) * 0.045).clamp(8.0, 42.0);
-    let skin = Rgba([231, 190, 158, 235]);
     let dark = Rgba([45, 45, 50, 250]);
     match layer.animation.hand {
+        HandStyle::Ghost => {}
         HandStyle::Pen => draw_thick_line(canvas, (tx + s * 1.8, ty + s * 1.6), (tx, ty), dark, (s * 0.25) as i32),
         HandStyle::PixelArt => {
-            for yy in 0..s as i32 { for xx in 0..(s * 1.3) as i32 {
-                let x = tx as i32 + xx; let y = ty as i32 + yy + s as i32 / 2;
-                if x >= 0 && y >= 0 && x < canvas.width() as i32 && y < canvas.height() as i32 { canvas.put_pixel(x as u32, y as u32, skin); }
-            }}
+            let skin = Rgba([228, 183, 145, 240]);
+            for yy in 0..s as i32 {
+                for xx in 0..(s * 1.3) as i32 {
+                    let x = tx as i32 + xx; let y = ty as i32 + yy + s as i32 / 2;
+                    if x >= 0 && y >= 0 && x < canvas.width() as i32 && y < canvas.height() as i32 { canvas.put_pixel(x as u32, y as u32, skin); }
+                }
+            }
+            draw_thick_line(canvas, (tx, ty), (tx + s * 0.9, ty + s * 0.95), dark, (s * 0.28) as i32);
         }
-        _ => {
-            draw_filled_circle_mut(canvas, ((tx + s * 0.9) as i32, (ty + s) as i32), (s * 0.65) as i32, skin);
-            draw_thick_line(canvas, (tx, ty), (tx + s * 1.45, ty + s * 1.65), dark, (s * 0.22) as i32);
+        HandStyle::Hand1 => draw_generic_hand(canvas, tx, ty, s, Rgba([238, 201, 171, 240]), Rgba([42, 98, 180, 240]), 1.0),
+        HandStyle::Hand2 => draw_generic_hand(canvas, tx, ty, s, Rgba([198, 144, 108, 240]), Rgba([38, 126, 86, 240]), 0.82),
+        HandStyle::Hand3 => draw_generic_hand(canvas, tx, ty, s, Rgba([139, 91, 68, 240]), Rgba([116, 58, 148, 240]), 1.18),
+        HandStyle::Cartoon => {
+            draw_filled_circle_mut(canvas, ((tx + s * 0.9) as i32, (ty + s * 0.95) as i32), (s * 0.72) as i32, Rgba([255, 220, 150, 245]));
+            draw_thick_line(canvas, (tx, ty), (tx + s * 1.55, ty + s * 1.65), dark, (s * 0.30) as i32);
         }
     }
 }
 
-fn hand_tip(runtime: &RuntimeImage, layer: &Layer, progress: f32) -> (f32, f32) {
-    if matches!(layer.animation.style, AnimationStyle::Contour | AnimationStyle::OutlineFill | AnimationStyle::IllustFill | AnimationStyle::OutlineOnly) {
-        let pts = select_edge_path(&runtime.edges, &layer.animation);
-        if !pts.is_empty() {
-            let i = ((pts.len() - 1) as f32 * progress.clamp(0.0, 1.0)).round() as usize;
-            return (layer.transform.x + pts[i][0] * layer.transform.w, layer.transform.y + pts[i][1] * layer.transform.h);
+fn draw_generic_hand(canvas: &mut RgbaImage, tx: f32, ty: f32, s: f32, skin: Rgba<u8>, sleeve: Rgba<u8>, scale: f32) {
+    let s = s * scale;
+    draw_filled_circle_mut(canvas, ((tx + s * 0.82) as i32, (ty + s * 0.92) as i32), (s * 0.64) as i32, skin);
+    draw_filled_circle_mut(canvas, ((tx + s * 0.50) as i32, (ty + s * 0.58) as i32), (s * 0.23) as i32, skin);
+    draw_thick_line(canvas, (tx, ty), (tx + s * 1.48, ty + s * 1.68), Rgba([45, 45, 50, 250]), (s * 0.22) as i32);
+    let wrist_x = tx + s * 1.10;
+    let wrist_y = ty + s * 1.35;
+    for yy in 0..(s * 0.78).max(1.0) as i32 {
+        for xx in 0..(s * 1.55).max(1.0) as i32 {
+            let x = (wrist_x + xx as f32) as i32;
+            let y = (wrist_y + yy as f32) as i32;
+            if x >= 0 && y >= 0 && x < canvas.width() as i32 && y < canvas.height() as i32 { canvas.put_pixel(x as u32, y as u32, sleeve); }
         }
     }
-    let regions = reveal_regions(layer, progress);
-    if let Some(r) = regions.last() {
-        return (layer.transform.x + (r.u0 + r.u1) * 0.5 * layer.transform.w, layer.transform.y + (r.v0 + r.v1) * 0.5 * layer.transform.h);
-    }
-    (layer.transform.x + layer.transform.w * 0.5, layer.transform.y + layer.transform.h * 0.5)
 }
 
 fn blend_regions(canvas: &mut RgbaImage, source: &RgbaImage, offset_x: i32, offset_y: i32, regions: &[RevealRegion], opacity: f32) {
@@ -403,28 +412,80 @@ fn background_image(project: &Project) -> RgbaImage {
 }
 
 fn horizontal_raster_lines(img: &mut RgbaImage, color: Rgba<u8>, step: u32) {
-    let mut y = step; while y < img.height() { for x in 0..img.width() { img.put_pixel(x, y, color); } y += step; }
-}
-fn raster_grid(img: &mut RgbaImage, color: Rgba<u8>, step: u32) {
-    let mut x = 0; while x < img.width() { for y in 0..img.height() { img.put_pixel(x, y, color); } x += step; }
-    let mut y = 0; while y < img.height() { for x in 0..img.width() { img.put_pixel(x, y, color); } y += step; }
+    let mut y = step;
+    while y < img.height() {
+        for x in 0..img.width() { img.put_pixel(x, y, color); }
+        y += step;
+    }
 }
 
-fn load_windows_font(bold: bool, italic: bool) -> Option<FontArc> {
+fn raster_grid(img: &mut RgbaImage, color: Rgba<u8>, step: u32) {
+    let mut x = 0;
+    while x < img.width() {
+        for y in 0..img.height() { img.put_pixel(x, y, color); }
+        x += step;
+    }
+    let mut y = 0;
+    while y < img.height() {
+        for x in 0..img.width() { img.put_pixel(x, y, color); }
+        y += step;
+    }
+}
+
+fn load_windows_font(family: &str, bold: bool, italic: bool) -> Option<FontArc> {
     let windir = std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
     let fonts = windir.join("Fonts");
-    let primary = match (bold, italic) {
-        (true, true) => "segoeuiz.ttf",
-        (true, false) => "segoeuib.ttf",
-        (false, true) => "segoeuii.ttf",
-        _ => "segoeui.ttf",
-    };
-    for path in [fonts.join(primary), fonts.join("arial.ttf")] {
+    let normalized = normalize_font_name(family);
+    let mut candidates = Vec::<PathBuf>::new();
+
+    if normalized == "segoeui" || normalized == "segoe" {
+        let name = match (bold, italic) {
+            (true, true) => "segoeuiz.ttf",
+            (true, false) => "segoeuib.ttf",
+            (false, true) => "segoeuii.ttf",
+            _ => "segoeui.ttf",
+        };
+        candidates.push(fonts.join(name));
+    } else if normalized == "arial" {
+        let name = match (bold, italic) {
+            (true, true) => "arialbi.ttf",
+            (true, false) => "arialbd.ttf",
+            (false, true) => "ariali.ttf",
+            _ => "arial.ttf",
+        };
+        candidates.push(fonts.join(name));
+    } else if let Ok(entries) = fs::read_dir(&fonts) {
+        let mut matches = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+            if ext != "ttf" && ext != "otf" { continue; }
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let stem_norm = normalize_font_name(stem);
+            if !normalized.is_empty() && (stem_norm.contains(&normalized) || normalized.contains(&stem_norm)) {
+                let mut score = 0;
+                let stem_lower = stem.to_ascii_lowercase();
+                if bold && (stem_lower.contains("bold") || stem_lower.ends_with('b')) { score += 2; }
+                if italic && (stem_lower.contains("italic") || stem_lower.ends_with('i')) { score += 2; }
+                matches.push((score, path));
+            }
+        }
+        matches.sort_by(|a, b| b.0.cmp(&a.0));
+        candidates.extend(matches.into_iter().map(|(_, p)| p));
+    }
+
+    candidates.push(fonts.join("segoeui.ttf"));
+    candidates.push(fonts.join("arial.ttf"));
+    for path in candidates {
         if let Ok(bytes) = fs::read(path) {
             if let Ok(font) = FontArc::try_from_vec(bytes) { return Some(font); }
         }
     }
     None
+}
+
+fn normalize_font_name(name: &str) -> String {
+    name.chars().filter(|c| c.is_ascii_alphanumeric()).flat_map(|c| c.to_lowercase()).collect()
 }
 
 fn ffmpeg_available() -> bool {
