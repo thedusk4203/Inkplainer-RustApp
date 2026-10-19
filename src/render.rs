@@ -74,7 +74,7 @@ pub fn paint_project(
                 let r = ui.interact(handle_rect, id, egui::Sense::drag());
                 let fill = if r.hovered() || r.dragged() { Color32::WHITE } else { Color32::from_rgb(56, 132, 255) };
                 painter.rect_filled(handle_rect, 2.0, fill);
-                painter.rect_stroke(handle_rect, 2.0, Stroke::new(1.5, Color32::from_rgb(25, 82, 180)), StrokeKind::Inside);
+                painter.rect_stroke(handle_rect, 2.0, Stroke::new(1.5_f32, Color32::from_rgb(25, 82, 180)), StrokeKind::Inside);
                 if r.dragged() {
                     let d = ui.input(|i| i.pointer.delta());
                     selected_resize_delta = Some(ResizeDelta {
@@ -117,7 +117,17 @@ fn paint_layer(
                     AnimationStyle::OutlineOnly => paint_outline_only(painter, layer_rect, runtime, layer, progress),
                     _ => paint_reveal(painter, layer_rect, runtime, layer, progress, tint),
                 }
-                paint_hand(painter, layer_rect, runtime, layer, progress, project.hand_glide_enabled);
+                paint_hand(
+                    painter,
+                    canvas_rect,
+                    layer_rect,
+                    project,
+                    assets,
+                    runtime,
+                    layer,
+                    progress,
+                    project.hand_glide_enabled,
+                );
             } else {
                 painter.rect_filled(layer_rect, 0.0, Color32::from_rgb(80, 30, 30));
                 painter.text(layer_rect.center(), Align2::CENTER_CENTER, "Missing image", FontId::proportional(16.0), Color32::WHITE);
@@ -333,13 +343,44 @@ fn paint_edge_path(painter: &egui::Painter, rect: Rect, runtime: &RuntimeImage, 
     }
 }
 
-fn paint_hand(painter: &egui::Painter, rect: Rect, runtime: &RuntimeImage, layer: &Layer, progress: f32, smooth_hand: bool) {
+fn paint_hand(
+    painter: &egui::Painter,
+    canvas_rect: Rect,
+    rect: Rect,
+    project: &Project,
+    assets: &RuntimeAssets,
+    runtime: &RuntimeImage,
+    layer: &Layer,
+    progress: f32,
+    smooth_hand: bool,
+) {
     if layer.animation.hand == HandStyle::Ghost || progress <= 0.0 || progress >= 1.0 { return; }
     let tip = if smooth_hand {
         smoothed_hand_tip(rect, runtime, layer, progress)
     } else {
         hand_tip(rect, runtime, layer, progress)
     };
+
+    if let Some(hand) = assets.hand(layer.animation.hand, project.canvas.width, project.canvas.height) {
+        if hand.rgba.width() > 1 || hand.rgba.height() > 1 {
+            let sx = canvas_rect.width() / project.canvas.width.max(1) as f32;
+            let sy = canvas_rect.height() / project.canvas.height.max(1) as f32;
+            let dst = Rect::from_min_size(
+                Pos2::new(tip.x - hand.tip_x as f32 * sx, tip.y - hand.tip_y as f32 * sy),
+                Vec2::new(hand.width as f32 * sx, hand.height as f32 * sy),
+            );
+            painter.image(
+                hand.texture.id(),
+                dst,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::WHITE,
+            );
+            return;
+        }
+    }
+
+    // Procedural fallback is retained only for local/offline source builds where
+    // build.rs could not stage the pinned upstream PNG sprites.
     let s = (rect.width().min(rect.height()) * 0.035).clamp(8.0, 34.0);
     match layer.animation.hand {
         HandStyle::Ghost => {}
