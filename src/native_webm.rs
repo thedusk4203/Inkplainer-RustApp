@@ -89,12 +89,14 @@ pub fn export_webm(
         av1_frame.planes[0].copy_from_raw_u8(&y, out_w as usize, 1);
         av1_frame.planes[1].copy_from_raw_u8(&u, (out_w / 2) as usize, 1);
         av1_frame.planes[2].copy_from_raw_u8(&v, (out_w / 2) as usize, 1);
-        av1_frame.pad(out_w as usize, out_h as usize);
+        av1_frame.planes[0].pad(out_w as usize, out_h as usize);
+        av1_frame.planes[1].pad((out_w / 2) as usize, (out_h / 2) as usize);
+        av1_frame.planes[2].pad((out_w / 2) as usize, (out_h / 2) as usize);
         encoder
             .send_frame(av1_frame)
             .map_err(|e| format!("Queue AV1 frame {i}: {e}"))?;
 
-        drain_packets(&mut encoder, &mut muxer, fps, &mut encoded_packets, false)?;
+        drain_packets(&mut encoder, &mut muxer, fps, &mut encoded_packets)?;
         progress.store(
             ((((i + 1) as f32 / frame_count as f32) * 900.0).round() as u32).min(900),
             Ordering::Relaxed,
@@ -111,7 +113,9 @@ pub fn export_webm(
             Ok(packet) => {
                 push_packet(&mut muxer, fps, packet)?;
                 encoded_packets += 1;
-                let flush_progress = 900 + ((encoded_packets.min(frame_count) as f32 / frame_count as f32) * 90.0) as u32;
+                let flush_progress = 900
+                    + ((encoded_packets.min(frame_count) as f32 / frame_count as f32) * 90.0)
+                        as u32;
                 progress.store(flush_progress.min(990), Ordering::Relaxed);
             }
             Err(EncoderStatus::LimitReached) => break,
@@ -136,7 +140,6 @@ fn drain_packets(
     muxer: &mut Muxer<ebml_webm::mux::Live>,
     fps: u32,
     encoded_packets: &mut u32,
-    flushing: bool,
 ) -> Result<(), String> {
     loop {
         match encoder.receive_packet() {
@@ -144,9 +147,9 @@ fn drain_packets(
                 push_packet(muxer, fps, packet)?;
                 *encoded_packets += 1;
             }
-            Err(EncoderStatus::NeedMoreData) | Err(EncoderStatus::Encoded) => break,
-            Err(EncoderStatus::LimitReached) if flushing => break,
-            Err(EncoderStatus::LimitReached) => break,
+            Err(EncoderStatus::NeedMoreData)
+            | Err(EncoderStatus::Encoded)
+            | Err(EncoderStatus::LimitReached) => break,
             Err(e) => return Err(format!("Receive AV1 packet: {e}")),
         }
     }
@@ -191,7 +194,9 @@ fn rgba_to_i420(image: &RgbaImage) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
             let mut b = 0.0f32;
             for dy in 0..2 {
                 for dx in 0..2 {
-                    let p = image.get_pixel((cx * 2 + dx) as u32, (cy * 2 + dy) as u32).0;
+                    let p = image
+                        .get_pixel((cx * 2 + dx) as u32, (cy * 2 + dy) as u32)
+                        .0;
                     r += p[0] as f32;
                     g += p[1] as f32;
                     b += p[2] as f32;
