@@ -1,4 +1,5 @@
 const DEFAULT_HAND_SPEED: f32 = 6.0;
+const MAX_HAND_SPEED: f32 = 20.0;
 
 /// Maps the layer's reveal progress to an independent hand-path progress.
 ///
@@ -17,7 +18,7 @@ pub fn hand_motion_progress(progress: f32, hand_speed: f32) -> f32 {
     }
 
     let hand_speed = if hand_speed.is_finite() {
-        hand_speed.clamp(1.0, 30.0)
+        hand_speed.clamp(1.0, MAX_HAND_SPEED)
     } else {
         DEFAULT_HAND_SPEED
     };
@@ -38,7 +39,7 @@ mod tests {
 
     #[test]
     fn hand_speed_is_monotonic_across_supported_range() {
-        let speeds = [1.0_f32, 3.0, 6.0, 10.0, 20.0, 30.0];
+        let speeds = [1.0_f32, 3.0, 6.0, 10.0, 15.0, MAX_HAND_SPEED];
         let values: Vec<f32> = speeds
             .into_iter()
             .map(|speed| hand_motion_progress(0.5, speed))
@@ -50,9 +51,16 @@ mod tests {
 
     #[test]
     fn hand_timing_preserves_endpoints_and_sanitizes_invalid_values() {
-        assert_eq!(hand_motion_progress(0.0, 30.0), 0.0);
+        assert_eq!(hand_motion_progress(0.0, MAX_HAND_SPEED), 0.0);
         assert_eq!(hand_motion_progress(1.0, 1.0), 1.0);
         assert_eq!(hand_motion_progress(f32::NAN, 6.0), 0.0);
         assert!((hand_motion_progress(0.5, f32::NAN) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn values_above_upstream_max_are_clamped() {
+        let at_max = hand_motion_progress(0.5, MAX_HAND_SPEED);
+        let above_max = hand_motion_progress(0.5, 30.0);
+        assert!((at_max - above_max).abs() < 1e-6);
     }
 }
