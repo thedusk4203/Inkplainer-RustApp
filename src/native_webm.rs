@@ -56,8 +56,8 @@ pub fn export_webm(
             track_type: 1,
             codec_id: "V_AV1".to_owned(),
             codec_private: None,
-            width: out_w as u64,
-            height: out_h as u64,
+            width: out_w,
+            height: out_h,
             sample_rate: 0.0,
             channels: 0,
         })
@@ -161,7 +161,9 @@ fn push_packet(
     fps: u32,
     packet: Packet<u8>,
 ) -> Result<(), String> {
-    let timecode_ms = packet.input_frameno.saturating_mul(1000) / fps as u64;
+    let timecode_ms_u64 = packet.input_frameno.saturating_mul(1000) / fps as u64;
+    let timecode_ms = i64::try_from(timecode_ms_u64)
+        .map_err(|_| "WebM timestamp exceeds i64 range".to_owned())?;
     let keyframe = packet.frame_type == FrameType::KEY;
     muxer
         .push_frame(1, timecode_ms, keyframe, &packet.data)
