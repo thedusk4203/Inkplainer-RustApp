@@ -1,5 +1,7 @@
 use crate::model::{AnimationStyle, Layer, Project};
 
+const DEFAULT_REVEAL_SPEED: f32 = 40.0;
+
 #[derive(Debug, Clone, Copy)]
 pub struct RevealRegion {
     pub u0: f32,
@@ -10,7 +12,12 @@ pub struct RevealRegion {
 
 impl RevealRegion {
     pub fn full() -> Self {
-        Self { u0: 0.0, v0: 0.0, u1: 1.0, v1: 1.0 }
+        Self {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+        }
     }
 }
 
@@ -20,19 +27,62 @@ pub fn layer_progress(project: &Project, layer_index: usize, global_progress: f3
     }
 
     let mut group_keys: Vec<GroupKey> = Vec::new();
-    for (idx, layer) in project.layers.iter().enumerate().filter(|(_, l)| l.visible) {
-        let key = layer.anim_order.map(GroupKey::Ordered).unwrap_or(GroupKey::Unordered(idx));
+    for (idx, layer) in project
+        .layers
+        .iter()
+        .enumerate()
+        .filter(|(_, layer)| layer.visible)
+    {
+        let key = layer
+            .anim_order
+            .map(GroupKey::Ordered)
+            .unwrap_or(GroupKey::Unordered(idx));
         if !group_keys.contains(&key) {
             group_keys.push(key);
         }
     }
-    group_keys.sort_by(|a, b| a.sort_key().partial_cmp(&b.sort_key()).unwrap_or(std::cmp::Ordering::Equal));
+    group_keys.sort_by(|a, b| {
+        a.sort_key()
+            .partial_cmp(&b.sort_key())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let layer = &project.layers[layer_index];
-    let target = layer.anim_order.map(GroupKey::Ordered).unwrap_or(GroupKey::Unordered(layer_index));
-    let group_index = group_keys.iter().position(|k| *k == target).unwrap_or(0);
+    let target = layer
+        .anim_order
+        .map(GroupKey::Ordered)
+        .unwrap_or(GroupKey::Unordered(layer_index));
+    let group_index = group_keys.iter().position(|key| *key == target).unwrap_or(0);
     let count = group_keys.len().max(1) as f32;
-    (global_progress.clamp(0.0, 1.0) * count - group_index as f32).clamp(0.0, 1.0)
+    let group_progress =
+        (global_progress.clamp(0.0, 1.0) * count - group_index as f32).clamp(0.0, 1.0);
+
+    shape_progress_by_speed(group_progress, layer.animation.speed)
+}
+
+fn shape_progress_by_speed(progress: f32, speed: f32) -> f32 {
+    if !progress.is_finite() {
+        return 0.0;
+    }
+
+    let progress = progress.clamp(0.0, 1.0);
+    if progress <= 0.0 || progress >= 1.0 {
+        return progress;
+    }
+
+    let speed = if speed.is_finite() {
+        speed.clamp(1.0, 100.0)
+    } else {
+        DEFAULT_REVEAL_SPEED
+    };
+
+    // Preserve the existing 40-speed timing exactly while making the per-layer
+    // Reveal Speed control materially affect the animation. Faster values move
+    // more of the reveal earlier in the layer's timeline slot; slower values
+    // defer more work until later. Endpoints remain exact so every layer is
+    // guaranteed to be complete at the end of its slot and export timeline.
+    let exponent = (DEFAULT_REVEAL_SPEED / speed).clamp(0.4, 4.0);
+    progress.powf(exponent).clamp(0.0, 1.0)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,8 +94,8 @@ enum GroupKey {
 impl GroupKey {
     fn sort_key(self) -> f64 {
         match self {
-            Self::Ordered(v) => v as f64,
-            Self::Unordered(i) => 1_000_000.0 + i as f64,
+            Self::Ordered(value) => value as f64,
+            Self::Unordered(index) => 1_000_000.0 + index as f64,
         }
     }
 }
@@ -61,12 +111,16 @@ pub fn reveal_regions(layer: &Layer, progress: f32) -> Vec<RevealRegion> {
 
     match layer.animation.style {
         AnimationStyle::Scanner => scanner_regions(p, layer.animation.zigzag),
-        AnimationStyle::ChunkJump | AnimationStyle::OutlineChunks => chunk_regions(layer, p, Priority::Random),
+        AnimationStyle::ChunkJump | AnimationStyle::OutlineChunks => {
+            chunk_regions(layer, p, Priority::Random)
+        }
         AnimationStyle::Scribble => chunk_regions(layer, p, Priority::Scribble),
         AnimationStyle::Nervous => nervous_regions(layer, p),
         AnimationStyle::TopAnchor => top_anchor_regions(layer, p),
         AnimationStyle::Human => chunk_regions(layer, p, Priority::Human),
-        AnimationStyle::Animal | AnimationStyle::Vehicle => chunk_regions(layer, p, Priority::LeftToRight),
+        AnimationStyle::Animal | AnimationStyle::Vehicle => {
+            chunk_regions(layer, p, Priority::LeftToRight)
+        }
         AnimationStyle::Portrait => chunk_regions(layer, p, Priority::CenterOut),
         AnimationStyle::Building => chunk_regions(layer, p, Priority::BottomUp),
         AnimationStyle::Landscape => chunk_regions(layer, p, Priority::TopDown),
@@ -89,15 +143,30 @@ fn scanner_regions(progress: f32, zigzag: bool) -> Vec<RevealRegion> {
     for band in 0..full_bands.min(BANDS) {
         let v0 = band as f32 / BANDS as f32;
         let v1 = (band + 1) as f32 / BANDS as f32;
-        out.push(RevealRegion { u0: 0.0, v0, u1: 1.0, v1 });
+        out.push(RevealRegion {
+            u0: 0.0,
+            v0,
+            u1: 1.0,
+            v1,
+        });
     }
     if full_bands < BANDS && partial > 0.0 {
         let v0 = full_bands as f32 / BANDS as f32;
         let v1 = (full_bands + 1) as f32 / BANDS as f32;
         if zigzag && full_bands % 2 == 1 {
-            out.push(RevealRegion { u0: 1.0 - partial, v0, u1: 1.0, v1 });
+            out.push(RevealRegion {
+                u0: 1.0 - partial,
+                v0,
+                u1: 1.0,
+                v1,
+            });
         } else {
-            out.push(RevealRegion { u0: 0.0, v0, u1: partial, v1 });
+            out.push(RevealRegion {
+                u0: 0.0,
+                v0,
+                u1: partial,
+                v1,
+            });
         }
     }
     out
@@ -115,12 +184,16 @@ fn nervous_regions(layer: &Layer, progress: f32) -> Vec<RevealRegion> {
         ja.partial_cmp(&jb).unwrap_or(std::cmp::Ordering::Equal)
     });
     let count = ((rows as f32 * progress).ceil() as usize).min(rows);
-    order.into_iter().take(count).map(|row| RevealRegion {
-        u0: 0.0,
-        v0: row as f32 / rows as f32,
-        u1: 1.0,
-        v1: (row + 1) as f32 / rows as f32,
-    }).collect()
+    order
+        .into_iter()
+        .take(count)
+        .map(|row| RevealRegion {
+            u0: 0.0,
+            v0: row as f32 / rows as f32,
+            u1: 1.0,
+            v1: (row + 1) as f32 / rows as f32,
+        })
+        .collect()
 }
 
 fn top_anchor_regions(layer: &Layer, progress: f32) -> Vec<RevealRegion> {
@@ -134,12 +207,22 @@ fn top_anchor_regions(layer: &Layer, progress: f32) -> Vec<RevealRegion> {
     let mut out = Vec::new();
     for col in order.iter().take(full_cols.min(cols)) {
         let u0 = *col as f32 / cols as f32;
-        out.push(RevealRegion { u0, v0: 0.0, u1: (*col + 1) as f32 / cols as f32, v1: 1.0 });
+        out.push(RevealRegion {
+            u0,
+            v0: 0.0,
+            u1: (*col + 1) as f32 / cols as f32,
+            v1: 1.0,
+        });
     }
     if full_cols < cols && partial > 0.0 {
         let col = order[full_cols];
         let u0 = col as f32 / cols as f32;
-        out.push(RevealRegion { u0, v0: 0.0, u1: (col + 1) as f32 / cols as f32, v1: partial });
+        out.push(RevealRegion {
+            u0,
+            v0: 0.0,
+            u1: (col + 1) as f32 / cols as f32,
+            v1: partial,
+        });
     }
     out
 }
@@ -217,29 +300,33 @@ fn chunk_regions(layer: &Layer, progress: f32, priority: Priority) -> Vec<Reveal
             .then_with(|| a.tie.cmp(&b.tie))
     });
     let visible = ((tiles.len() as f32 * progress).ceil() as usize).min(tiles.len());
-    tiles.into_iter().take(visible).map(|t| t.region).collect()
+    tiles
+        .into_iter()
+        .take(visible)
+        .map(|tile| tile.region)
+        .collect()
 }
 
 fn stable_hash(text: &str) -> u64 {
-    let mut h = 0xcbf29ce484222325u64;
+    let mut hash = 0xcbf29ce484222325u64;
     for byte in text.as_bytes() {
-        h ^= *byte as u64;
-        h = h.wrapping_mul(0x100000001b3);
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
     }
-    h
+    hash
 }
 
-fn mix64(mut x: u64) -> u64 {
-    x ^= x >> 30;
-    x = x.wrapping_mul(0xbf58476d1ce4e5b9);
-    x ^= x >> 27;
-    x = x.wrapping_mul(0x94d049bb133111eb);
-    x ^ (x >> 31)
+fn mix64(mut value: u64) -> u64 {
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58476d1ce4e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d049bb133111eb);
+    value ^ (value >> 31)
 }
 
 fn pseudo(seed: u64, index: u64) -> f32 {
-    let v = mix64(seed ^ index.wrapping_mul(0x9e3779b97f4a7c15));
-    (v as f64 / u64::MAX as f64) as f32
+    let value = mix64(seed ^ index.wrapping_mul(0x9e3779b97f4a7c15));
+    (value as f64 / u64::MAX as f64) as f32
 }
 
 #[cfg(test)]
@@ -249,24 +336,62 @@ mod tests {
 
     #[test]
     fn equal_orders_share_timeline_group() {
-        let mut p = Project::default();
-        let mut a = Layer::new_text(p.canvas.width, p.canvas.height);
-        let mut b = Layer::new_text(p.canvas.width, p.canvas.height);
+        let mut project = Project::default();
+        let mut a = Layer::new_text(project.canvas.width, project.canvas.height);
+        let mut b = Layer::new_text(project.canvas.width, project.canvas.height);
         a.anim_order = Some(1);
         b.anim_order = Some(1);
-        p.layers = vec![a, b];
-        assert!((layer_progress(&p, 0, 0.5) - layer_progress(&p, 1, 0.5)).abs() < f32::EPSILON);
+        project.layers = vec![a, b];
+        assert!(
+            (layer_progress(&project, 0, 0.5) - layer_progress(&project, 1, 0.5)).abs()
+                < f32::EPSILON
+        );
     }
 
     #[test]
     fn ordered_layer_runs_before_unordered_layer() {
-        let mut p = Project::default();
-        let mut a = Layer::new_text(p.canvas.width, p.canvas.height);
-        let b = Layer::new_text(p.canvas.width, p.canvas.height);
+        let mut project = Project::default();
+        let mut a = Layer::new_text(project.canvas.width, project.canvas.height);
+        let b = Layer::new_text(project.canvas.width, project.canvas.height);
         a.anim_order = Some(1);
-        p.layers = vec![a, b];
-        assert_eq!(layer_progress(&p, 0, 0.25), 0.5);
-        assert_eq!(layer_progress(&p, 1, 0.25), 0.0);
+        project.layers = vec![a, b];
+        assert_eq!(layer_progress(&project, 0, 0.25), 0.5);
+        assert_eq!(layer_progress(&project, 1, 0.25), 0.0);
+    }
+
+    #[test]
+    fn reveal_speed_changes_progress_without_breaking_endpoints() {
+        let mut project = Project::default();
+        let mut slow = Layer::new_text(project.canvas.width, project.canvas.height);
+        let mut normal = Layer::new_text(project.canvas.width, project.canvas.height);
+        let mut fast = Layer::new_text(project.canvas.width, project.canvas.height);
+        slow.anim_order = Some(1);
+        normal.anim_order = Some(1);
+        fast.anim_order = Some(1);
+        slow.animation.speed = 10.0;
+        normal.animation.speed = DEFAULT_REVEAL_SPEED;
+        fast.animation.speed = 100.0;
+        project.layers = vec![slow, normal, fast];
+
+        let slow_mid = layer_progress(&project, 0, 0.5);
+        let normal_mid = layer_progress(&project, 1, 0.5);
+        let fast_mid = layer_progress(&project, 2, 0.5);
+        assert!(slow_mid < normal_mid);
+        assert!(normal_mid < fast_mid);
+
+        for index in 0..project.layers.len() {
+            assert_eq!(layer_progress(&project, index, 0.0), 0.0);
+            assert_eq!(layer_progress(&project, index, 1.0), 1.0);
+        }
+    }
+
+    #[test]
+    fn invalid_reveal_speed_falls_back_to_default() {
+        let mut project = Project::default();
+        let mut layer = Layer::new_text(project.canvas.width, project.canvas.height);
+        layer.animation.speed = f32::NAN;
+        project.layers = vec![layer];
+        assert_eq!(layer_progress(&project, 0, 0.5), 0.5);
     }
 
     #[test]
