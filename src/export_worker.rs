@@ -10,6 +10,7 @@ use std::time::Duration;
 use crate::assets::RuntimeAssets;
 use crate::export;
 use crate::model::{ExportQuality, Project};
+use crate::native_mp4;
 
 pub struct ExportJob {
     pub path: PathBuf,
@@ -49,18 +50,21 @@ pub fn start(project: Project, assets: RuntimeAssets, path: PathBuf, webm: bool)
     let worker_path = path.clone();
 
     thread::spawn(move || {
-        let result = run_export(project, assets, worker_path, webm, &worker_progress, &worker_cancel);
+        let result = if webm {
+            run_webm_export(project, assets, worker_path, &worker_progress, &worker_cancel)
+        } else {
+            native_mp4::export_mp4(&project, &assets, &worker_path, &worker_progress, &worker_cancel)
+        };
         let _ = sender.send(result);
     });
 
     ExportJob { path, progress, cancel, receiver }
 }
 
-fn run_export(
+fn run_webm_export(
     project: Project,
     assets: RuntimeAssets,
     path: PathBuf,
-    webm: bool,
     progress: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
@@ -97,14 +101,12 @@ fn run_export(
         };
         let mut command = Command::new("ffmpeg");
         command.args(["-y", "-hide_banner", "-loglevel", "error", "-framerate", &fps.to_string(), "-i"])
-            .arg(&input);
-        if webm {
-            command.args(["-c:v", "libvpx-vp9", "-crf", crf, "-b:v", "0", "-pix_fmt", "yuv420p"]);
-        } else {
-            command.args(["-c:v", "libx264", "-crf", crf, "-pix_fmt", "yuv420p", "-movflags", "+faststart"]);
-        }
-        command.arg(&path).stdout(Stdio::null()).stderr(Stdio::piped());
-        let mut child = command.spawn().map_err(|e| format!("Start ffmpeg: {e}. Install ffmpeg or use PNG export."))?;
+            .arg(&input)
+            .args(["-c:v", "libvpx-vp9", "-crf", crf, "-b:v", "0", "-pix_fmt", "yuv420p"])
+            .arg(&path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().map_err(|e| format!("Start ffmpeg for WebM: {e}. MP4 export is fully self-contained; install ffmpeg only for WebM until the native AV1 muxer is enabled."))?;
         progress.store(950, Ordering::Relaxed);
 
         loop {
