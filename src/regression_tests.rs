@@ -1,0 +1,141 @@
+#![cfg(test)]
+
+use std::fs;
+
+use crate::animation::{layer_progress, reveal_regions};
+use crate::model::{AnimationStyle, Layer, Project};
+use crate::project_io;
+
+#[test]
+fn ordered_layers_share_groups_and_unordered_layers_follow() {
+    let mut project = Project::default();
+    let mut a = Layer::new_text(project.canvas.width, project.canvas.height);
+    let mut b = Layer::new_text(project.canvas.width, project.canvas.height);
+    let mut c = Layer::new_text(project.canvas.width, project.canvas.height);
+    a.anim_order = Some(1);
+    b.anim_order = Some(1);
+    c.anim_order = None;
+    project.layers = vec![a, b, c];
+
+    let pa = layer_progress(&project, 0, 0.25);
+    let pb = layer_progress(&project, 1, 0.25);
+    let pc = layer_progress(&project, 2, 0.25);
+    assert!((pa - pb).abs() < f32::EPSILON);
+    assert!(pa > 0.0);
+    assert_eq!(pc, 0.0);
+
+    assert_eq!(layer_progress(&project, 0, 1.0), 1.0);
+    assert_eq!(layer_progress(&project, 1, 1.0), 1.0);
+    assert_eq!(layer_progress(&project, 2, 1.0), 1.0);
+}
+
+#[test]
+fn every_reveal_style_stays_inside_normalized_canvas() {
+    let mut project = Project::default();
+    let mut layer = Layer::new_text(project.canvas.width, project.canvas.height);
+    layer.id = "regression-seed".to_owned();
+
+    let styles = [
+        AnimationStyle::Scanner,
+        AnimationStyle::ChunkJump,
+        AnimationStyle::OutlineChunks,
+        AnimationStyle::Scribble,
+        AnimationStyle::Nervous,
+        AnimationStyle::TopAnchor,
+        AnimationStyle::Human,
+        AnimationStyle::Animal,
+        AnimationStyle::Portrait,
+        AnimationStyle::Vehicle,
+        AnimationStyle::Building,
+        AnimationStyle::Landscape,
+        AnimationStyle::Spiral,
+        AnimationStyle::Nature,
+    ];
+
+    for style in styles {
+        layer.animation.style = style;
+        for progress in [0.01_f32, 0.1, 0.33, 0.5, 0.9, 0.999] {
+            for region in reveal_regions(&layer, progress) {
+                assert!(region.u0 >= 0.0 && region.u0 <= 1.0, "{style:?}: u0");
+                assert!(region.u1 >= 0.0 && region.u1 <= 1.0, "{style:?}: u1");
+                assert!(region.v0 >= 0.0 && region.v0 <= 1.0, "{style:?}: v0");
+                assert!(region.v1 >= 0.0 && region.v1 <= 1.0, "{style:?}: v1");
+                assert!(region.u1 >= region.u0, "{style:?}: inverted u");
+                assert!(region.v1 >= region.v0, "{style:?}: inverted v");
+            }
+        }
+    }
+}
+
+#[test]
+fn deterministic_styles_produce_stable_reveal_geometry() {
+    let project = Project::default();
+    let mut layer = Layer::new_text(project.canvas.width, project.canvas.height);
+    layer.id = "stable-seed".to_owned();
+    layer.animation.chunks = 37;
+
+    for style in [
+        AnimationStyle::ChunkJump,
+        AnimationStyle::Scribble,
+        AnimationStyle::Nervous,
+        AnimationStyle::TopAnchor,
+        AnimationStyle::Human,
+        AnimationStyle::Portrait,
+        AnimationStyle::Spiral,
+        AnimationStyle::Nature,
+    ] {
+        layer.animation.style = style;
+        let a = reveal_regions(&layer, 0.47);
+        let b = reveal_regions(&layer, 0.47);
+        assert_eq!(a.len(), b.len(), "{style:?}");
+        for (ra, rb) in a.iter().zip(b.iter()) {
+            assert!((ra.u0 - rb.u0).abs() < f32::EPSILON);
+            assert!((ra.v0 - rb.v0).abs() < f32::EPSILON);
+            assert!((ra.u1 - rb.u1).abs() < f32::EPSILON);
+            assert!((ra.v1 - rb.v1).abs() < f32::EPSILON);
+        }
+    }
+}
+
+#[test]
+fn project_json_roundtrip_preserves_editor_state() {
+    let mut project = Project::default();
+    project.name = "Parity regression".to_owned();
+    project.duration_seconds = 13.25;
+    project.hand_glide_enabled = false;
+    let mut layer = Layer::new_text(project.canvas.width, project.canvas.height);
+    layer.name = "Title".to_owned();
+    layer.anim_order = Some(7);
+    layer.animation.style = AnimationStyle::TextDraw;
+    layer.transform.x = 123.0;
+    layer.transform.y = 77.0;
+    project.layers.push(layer);
+
+    let json = serde_json::to_string(&project).expect("serialize");
+    let restored: Project = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(restored.name, project.name);
+    assert_eq!(restored.duration_seconds, project.duration_seconds);
+    assert_eq!(restored.hand_glide_enabled, project.hand_glide_enabled);
+    assert_eq!(restored.layers.len(), 1);
+    assert_eq!(restored.layers[0].name, "Title");
+    assert_eq!(restored.layers[0].anim_order, Some(7));
+    assert_eq!(restored.layers[0].animation.style, AnimationStyle::TextDraw);
+    assert_eq!(restored.layers[0].transform.x, 123.0);
+    assert_eq!(restored.layers[0].transform.y, 77.0);
+}
+
+#[test]
+fn project_file_roundtrip_works_without_assets() {
+    let mut project = Project::default();
+    project.name = "Persistence regression".to_owned();
+    project.layers.push(Layer::new_text(project.canvas.width, project.canvas.height));
+
+    let root = std::env::temp_dir().join(format!("inkplainer-test-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&root).expect("create temp test dir");
+    let path = root.join("roundtrip.inkplainer.json");
+    project_io::save_project(&project, &path).expect("save project");
+    let restored = project_io::load_project(&path).expect("load project");
+    assert_eq!(restored.name, project.name);
+    assert_eq!(restored.layers.len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
