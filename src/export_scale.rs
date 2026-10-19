@@ -30,10 +30,18 @@ pub fn resolved_export_dimensions(project: &Project) -> (u32, u32) {
         height *= scale;
     }
 
-    (
-        width.round().clamp(1.0, u32::MAX as f64) as u32,
-        height.round().clamp(1.0, u32::MAX as f64) as u32,
-    )
+    (nearest_even(width), nearest_even(height))
+}
+
+fn nearest_even(value: f64) -> u32 {
+    let value = value.clamp(2.0, MAX_EXPORT_LONG_SIDE);
+    let lower = ((value.floor() as u32) / 2 * 2).max(2);
+    let upper = lower.saturating_add(2).min(MAX_EXPORT_LONG_SIDE as u32);
+    if (value - lower as f64).abs() <= (upper as f64 - value).abs() {
+        lower
+    } else {
+        upper
+    }
 }
 
 pub fn render_frame_at_size(
@@ -167,7 +175,7 @@ mod tests {
         project.export.width = 100;
         project.export.height = 100;
         let (width, height) = resolved_export_dimensions(&project);
-        assert_eq!((width, height), (320, 569));
+        assert_eq!((width, height), (320, 568));
         assert!((width as f64 / height as f64 - 0.5625).abs() < 0.001);
     }
 
@@ -181,5 +189,17 @@ mod tests {
         let (width, height) = resolved_export_dimensions(&project);
         assert_eq!((width, height), (7680, 480));
         assert!((width as f64 / height as f64 - 16.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn resolved_dimensions_are_always_even_for_codec_input() {
+        let mut project = Project::default();
+        project.canvas.width = 1234;
+        project.canvas.height = 777;
+        project.export.width = 1919;
+        project.export.height = 1079;
+        let (width, height) = resolved_export_dimensions(&project);
+        assert_eq!(width % 2, 0);
+        assert_eq!(height % 2, 0);
     }
 }
