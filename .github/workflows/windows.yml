@@ -18,6 +18,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+      - name: Cache pinned hand sprites
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/inkplainer-hand-assets
+          key: inkplainer-hand-assets-760af54d3c7e0cf3a846fdf3c7bbe278c9f6df3e
       - name: Generate dependency lockfile
         run: cargo generate-lockfile
       - name: Upload generated lockfile
