@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::effects::{build_edge_paths, EdgePaths};
-use crate::model::{LayerContent, Project};
+use crate::hand_assets::{self, HandResolution};
+use crate::model::{HandStyle, LayerContent, Project};
 
 #[derive(Clone)]
 pub struct RuntimeImage {
@@ -14,9 +15,22 @@ pub struct RuntimeImage {
     pub edges: EdgePaths,
 }
 
+#[derive(Clone)]
+pub struct RuntimeHand {
+    pub style: HandStyle,
+    pub resolution: HandResolution,
+    pub texture: TextureHandle,
+    pub rgba: RgbaImage,
+    pub width: u32,
+    pub height: u32,
+    pub tip_x: u32,
+    pub tip_y: u32,
+}
+
 #[derive(Default, Clone)]
 pub struct RuntimeAssets {
     pub images: HashMap<String, RuntimeImage>,
+    pub hands: Vec<RuntimeHand>,
 }
 
 impl RuntimeAssets {
@@ -24,9 +38,53 @@ impl RuntimeAssets {
         self.images.clear();
     }
 
+    pub fn load_builtin_hands(&mut self, ctx: &egui::Context) -> Vec<String> {
+        self.hands.clear();
+        let mut errors = Vec::new();
+        for def in hand_assets::definitions() {
+            match image::load_from_memory(def.bytes) {
+                Ok(image) => {
+                    let rgba = image.to_rgba8();
+                    let size = [rgba.width() as usize, rgba.height() as usize];
+                    let color = ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+                    let texture = ctx.load_texture(
+                        format!("builtin-hand-{:?}-{:?}", def.style, def.resolution),
+                        color,
+                        TextureOptions::LINEAR,
+                    );
+                    self.hands.push(RuntimeHand {
+                        style: def.style,
+                        resolution: def.resolution,
+                        texture,
+                        rgba,
+                        width: def.width,
+                        height: def.height,
+                        tip_x: def.tip_x,
+                        tip_y: def.tip_y,
+                    });
+                }
+                Err(err) => errors.push(format!(
+                    "Failed to decode {:?}/{:?} hand sprite: {err}",
+                    def.style, def.resolution
+                )),
+            }
+        }
+        errors
+    }
+
+    pub fn hand(&self, style: HandStyle, canvas_w: u32, canvas_h: u32) -> Option<&RuntimeHand> {
+        let resolution = hand_assets::select_resolution(canvas_w, canvas_h);
+        self.hands
+            .iter()
+            .find(|h| h.style == style && h.resolution == resolution)
+    }
+
     pub fn load_project(&mut self, ctx: &egui::Context, project: &Project) -> Vec<String> {
         self.clear();
         let mut errors = Vec::new();
+        if self.hands.is_empty() {
+            errors.extend(self.load_builtin_hands(ctx));
+        }
         for layer in &project.layers {
             if let LayerContent::Image { path } = &layer.content {
                 if let Err(err) = self.load_image(ctx, &layer.id, path) {
