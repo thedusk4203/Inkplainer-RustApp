@@ -13,7 +13,7 @@ permissions:
 jobs:
   restyle:
     if: github.actor != 'github-actions[bot]'
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,19 +27,17 @@ jobs:
       - name: Format
         run: cargo fmt --all
       - name: Check with warnings denied
-        shell: pwsh
-        run: |
-          $env:RUSTFLAGS='-D warnings'
-          cargo check --all-targets
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo check --all-targets
       - name: Test
         run: cargo test --all-targets
       - name: Commit UI refactor
-        shell: pwsh
         run: |
-          if (git status --porcelain) {
+          if [ -n "$(git status --porcelain)" ]; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git add src/app.rs src/export_worker.rs src/render.rs
             git commit -m 'feat: match native UI to Inkplainer web layout'
             git push origin HEAD:main
-          }
+          fi
