@@ -118,9 +118,13 @@ fn point_in_polygon(p: [f32; 2], polygon: &[[f32; 2]]) -> bool {
     for i in 0..polygon.len() {
         let a = polygon[i];
         let b = polygon[j];
-        let crosses = ((a[1] > p[1]) != (b[1] > p[1]))
-            && (p[0] < (b[0] - a[0]) * (p[1] - a[1]) / ((b[1] - a[1]).abs().max(f32::EPSILON)) + a[0]);
-        if crosses { inside = !inside; }
+        if (a[1] > p[1]) != (b[1] > p[1]) {
+            let denom = b[1] - a[1];
+            if denom.abs() > f32::EPSILON {
+                let crossing_x = (b[0] - a[0]) * (p[1] - a[1]) / denom + a[0];
+                if p[0] < crossing_x { inside = !inside; }
+            }
+        }
         j = i;
     }
     inside
@@ -132,8 +136,11 @@ mod tests {
 
     #[test]
     fn polygon_hit_test() {
-        let p = [[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]];
-        assert!(point_in_polygon([0.5,0.5], &p));
-        assert!(!point_in_polygon([1.5,0.5], &p));
+        let clockwise = [[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]];
+        let counter_clockwise = [[0.0,0.0],[0.0,1.0],[1.0,1.0],[1.0,0.0]];
+        assert!(point_in_polygon([0.5,0.5], &clockwise));
+        assert!(point_in_polygon([0.5,0.5], &counter_clockwise));
+        assert!(!point_in_polygon([1.5,0.5], &clockwise));
+        assert!(!point_in_polygon([-0.1,0.5], &counter_clockwise));
     }
 }
