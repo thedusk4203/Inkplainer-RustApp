@@ -7,27 +7,58 @@ on:
       - '.github/workflows/bootstrap-local-rust.yml'
 
 jobs:
-  package-toolchain:
+  package-offline-cache:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.99.1
           components: rustfmt
-      - name: Pack Rust toolchain
+      - name: Resolve and fetch Cargo dependencies
         shell: bash
         run: |
           set -euo pipefail
-          rustc --version
-          cargo --version
-          rustfmt --version
-          sysroot="$(rustc --print sysroot)"
-          parent="$(dirname "$sysroot")"
-          name="$(basename "$sysroot")"
-          tar -C "$parent" -czf "$RUNNER_TEMP/rust-toolchain-1.99.1-x86_64-unknown-linux-gnu.tar.gz" "$name"
-      - name: Upload toolchain
+          cargo generate-lockfile
+          cargo fetch --locked
+      - name: Cache pinned hand sprites
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit='760af54d3c7e0cf3a846fdf3c7bbe278c9f6df3e'
+          cache="$HOME/.cargo/inkplainer-hand-assets/$commit"
+          mkdir -p "$cache"
+          for hand in 1 2 3 4 5 6; do
+            for res in 720p 1080p 1440p; do
+              for variant in "hand${hand}-${res}.png" "hand${hand}vertical-${res}.png"; do
+                curl --fail --location --silent --show-error --retry 5 \
+                  "https://raw.githubusercontent.com/NadirWeb-App/Inkplainer-OS/$commit/images/$variant" \
+                  --output "$cache/$variant"
+              done
+            done
+          done
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path.home()/'.cargo'/'inkplainer-hand-assets'/'760af54d3c7e0cf3a846fdf3c7bbe278c9f6df3e'
+          files = sorted(root.glob('*.png'))
+          assert len(files) == 36, len(files)
+          for path in files:
+              data = path.read_bytes()
+              assert len(data) > 64, path
+              assert data.startswith(b'\x89PNG\r\n\x1a\n'), path
+          print('validated', len(files), 'hand sprites')
+          PY
+      - name: Pack offline cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -C "$HOME/.cargo" -czf "$RUNNER_TEMP/inkplainer-cargo-cache-linux.tar.gz" registry inkplainer-hand-assets
+          cp Cargo.lock "$RUNNER_TEMP/Cargo.lock"
+      - name: Upload offline cache
         uses: actions/upload-artifact@v4
         with:
-          name: rust-toolchain-1.99.1-linux
-          path: ${{ runner.temp }}/rust-toolchain-1.99.1-x86_64-unknown-linux-gnu.tar.gz
+          name: inkplainer-offline-cargo-cache-linux
+          path: |
+            ${{ runner.temp }}/inkplainer-cargo-cache-linux.tar.gz
+            ${{ runner.temp }}/Cargo.lock
           compression-level: 0
