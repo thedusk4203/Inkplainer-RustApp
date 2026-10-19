@@ -1,0 +1,48 @@
+name: Sync upstream hand assets
+
+on:
+  push:
+    branches: [parity-final]
+    paths: [UPSTREAM_ASSET_SYNC]
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: parity-final
+      - name: Fetch Apache-2.0 Inkplainer hand assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p assets/hands
+          base="https://raw.githubusercontent.com/NadirWeb-App/Inkplainer-OS/main/images"
+          for file in \
+            hand1-720p.png hand1-1080p.png hand1-1440p.png \
+            hand1vertical-720p.png hand1vertical-1080p.png hand1vertical-1440p.png \
+            hand2-720p.png hand2-1080p.png hand2-1440p.png \
+            hand2vertical-720p.png hand2vertical-1080p.png hand2vertical-1440p.png; do
+            curl --fail --location --retry 3 "$base/$file" --output "assets/hands/$file"
+          done
+          cat > assets/hands/UPSTREAM.txt <<'EOF'
+          These image assets are copied from NadirWeb-App/Inkplainer-OS.
+          Upstream: https://github.com/NadirWeb-App/Inkplainer-OS
+          License: Apache License 2.0 (see repository LICENSE and UPSTREAM.md).
+          Files are embedded in the native Rust binary at compile time.
+          EOF
+      - name: Commit synced assets
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/hands
+          if git diff --cached --quiet; then
+            echo "Assets already current"
+            exit 0
+          fi
+          git commit -m "assets: sync upstream hand sprites [skip ci]"
+          git push origin HEAD:parity-final
