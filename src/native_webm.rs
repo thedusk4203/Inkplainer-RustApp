@@ -1,13 +1,13 @@
 use ebml_webm::mux::Muxer;
 use ebml_webm::types::TrackInfo;
-use image::{imageops::FilterType, RgbaImage};
+use image::RgbaImage;
 use rav1e::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::assets::RuntimeAssets;
-use crate::export;
+use crate::export_scale;
 use crate::model::{ExportQuality, Project};
 
 pub fn export_webm(
@@ -76,13 +76,8 @@ pub fn export_webm(
         } else {
             i as f32 / (frame_count - 1) as f32
         };
-        let frame = export::render_frame(project, assets, p)
+        let frame = export_scale::render_frame_at_size(project, assets, p, out_w, out_h)
             .map_err(|e| format!("Render frame {i}: {e:#}"))?;
-        let frame = if frame.width() != out_w || frame.height() != out_h {
-            image::imageops::resize(&frame, out_w, out_h, FilterType::Lanczos3)
-        } else {
-            frame
-        };
 
         let (y, u, v) = rgba_to_i420(&frame);
         let mut av1_frame = encoder.new_frame();
