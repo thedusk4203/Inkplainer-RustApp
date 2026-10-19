@@ -1,5 +1,8 @@
 mod animation;
-mod app;
+mod app {
+    include!("app.rs");
+    pub(crate) mod native_ui;
+}
 mod assets;
 mod effects;
 mod export;
@@ -20,6 +23,34 @@ mod regression_tests;
 use app::InkplainerApp;
 use eframe::egui;
 
+struct NativeUiApp {
+    inner: InkplainerApp,
+    left_tab: app::native_ui::LeftPanelTab,
+    input_mode: app::native_ui::InputMode,
+}
+
+impl NativeUiApp {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        app::native_ui::configure(&cc.egui_ctx);
+        Self {
+            inner: InkplainerApp::new(cc),
+            left_tab: app::native_ui::LeftPanelTab::default(),
+            input_mode: app::native_ui::InputMode::default(),
+        }
+    }
+}
+
+impl eframe::App for NativeUiApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        app::native_ui::update(
+            &mut self.inner,
+            ctx,
+            &mut self.left_tab,
+            &mut self.input_mode,
+        );
+    }
+}
+
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -32,6 +63,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Inkplainer RustApp",
         options,
-        Box::new(|cc| Ok(Box::new(InkplainerApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(NativeUiApp::new(cc)))),
     )
 }
