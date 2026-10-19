@@ -5,6 +5,7 @@ mod effects;
 mod export;
 mod fonts;
 mod hand;
+mod hand_assets;
 mod model;
 mod project_io;
 mod project_store;
