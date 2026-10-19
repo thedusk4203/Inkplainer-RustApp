@@ -22,8 +22,11 @@ mod timing;
 #[cfg(test)]
 mod regression_tests;
 
+use std::collections::HashSet;
+
 use app::InkplainerApp;
 use eframe::egui;
+use model::LayerContent;
 
 struct NativeUiApp {
     inner: InkplainerApp,
@@ -52,16 +55,60 @@ impl NativeUiApp {
             self.inner.project.export.height = resolved.1;
         }
     }
+
+    fn prune_failed_new_image_layers(&mut self, before_ids: &HashSet<String>) {
+        if self.inner.status.starts_with("Opened ")
+            || self.inner.status.starts_with("Autosave restored")
+        {
+            return;
+        }
+
+        let images = &self.inner.assets.images;
+        let before_len = self.inner.project.layers.len();
+        self.inner.project.layers.retain(|layer| {
+            if before_ids.contains(&layer.id) {
+                return true;
+            }
+            match &layer.content {
+                LayerContent::Text(_) => true,
+                LayerContent::Image { .. } => images.contains_key(&layer.id),
+            }
+        });
+        let removed = before_len.saturating_sub(self.inner.project.layers.len());
+        if removed == 0 {
+            return;
+        }
+
+        if self
+            .inner
+            .selected_layer
+            .is_some_and(|index| index >= self.inner.project.layers.len())
+        {
+            self.inner.selected_layer = self.inner.project.layers.len().checked_sub(1);
+        }
+        self.inner.status = format!(
+            "{} | {removed} failed image layer(s) were not added",
+            self.inner.status
+        );
+    }
 }
 
 impl eframe::App for NativeUiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let before_ids: HashSet<String> = self
+            .inner
+            .project
+            .layers
+            .iter()
+            .map(|layer| layer.id.clone())
+            .collect();
         app::native_ui::update(
             &mut self.inner,
             ctx,
             &mut self.left_tab,
             &mut self.input_mode,
         );
+        self.prune_failed_new_image_layers(&before_ids);
         self.normalize_export_dimensions();
     }
 }
