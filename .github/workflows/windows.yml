@@ -1,0 +1,25 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Check
+        run: cargo check --all-targets
+      - name: Build release
+        run: cargo build --release
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkplainer-rustapp-windows
+          path: target/release/inkplainer-rustapp.exe
